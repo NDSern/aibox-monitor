@@ -5,6 +5,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime
+from html import escape
 
 import config
 from email_alert import EmailAlert
@@ -42,26 +43,63 @@ class AiboxMonitor:
             return False
 
     def _send_down_email(
-        self, ip_address: str, name: str, hostname: str, timestamp: str, recipients: list[str]
+        self,
+        ip_address: str,
+        name: str,
+        hostname: str,
+        timestamp: str,
+        recipients: list[str],
+        aiboxes: dict[str, str],
     ) -> None:
         body = config.DOWN_BODY_TEMPLATE.format(
             hostname=hostname,
             timestamp=timestamp,
             ip=ip_address,
             name=name,
+            aibox_rows=self._build_aibox_rows(aiboxes, ip_address, "Mất kết nối", "#fee2e2", "#b91c1c"),
         )
         self.email_alert.send_status_email(config.DOWN_SUBJECT, body, recipients)
 
     def _send_up_email(
-        self, ip_address: str, name: str, hostname: str, timestamp: str, recipients: list[str]
+        self,
+        ip_address: str,
+        name: str,
+        hostname: str,
+        timestamp: str,
+        recipients: list[str],
+        aiboxes: dict[str, str],
     ) -> None:
         body = config.UP_BODY_TEMPLATE.format(
             hostname=hostname,
             timestamp=timestamp,
             ip=ip_address,
             name=name,
+            aibox_rows=self._build_aibox_rows(aiboxes, ip_address, "Đã kết nối lại", "#dcfce7", "#15803d"),
         )
         self.email_alert.send_status_email(config.UP_SUBJECT, body, recipients)
+
+    @staticmethod
+    def _build_aibox_rows(
+        aiboxes: dict[str, str], changed_ip: str, changed_status: str, highlight_bg: str, status_color: str
+    ) -> str:
+        rows = []
+        for ip_address, name in aiboxes.items():
+            is_changed = ip_address == changed_ip
+            cell_style = "border:1px solid #ddd;padding:8px;"
+            if is_changed:
+                cell_style += f"background:{highlight_bg};font-weight:bold;"
+            status_style = cell_style
+            if is_changed:
+                status_style += f"color:{status_color};"
+            status = changed_status if is_changed else "Không thay đổi"
+            rows.append(
+                "<tr>"
+                f'<td style="{status_style}">{escape(status)}</td>'
+                f'<td style="{cell_style}">{escape(name)}</td>'
+                f'<td style="{cell_style}">{escape(ip_address)}</td>'
+                "</tr>"
+            )
+        return "\n".join(rows)
 
     def check_aiboxes(self) -> None:
         hostname = socket.gethostname()
@@ -79,10 +117,10 @@ class AiboxMonitor:
                 logger.info(f"Initial AIBOX state: {name} ({ip_address}) is {state}")
             elif was_online and not is_online:
                 logger.warning(f"AIBOX offline: {name} ({ip_address})")
-                self._send_down_email(ip_address, name, hostname, timestamp, recipients)
+                self._send_down_email(ip_address, name, hostname, timestamp, recipients, aiboxes)
             elif not was_online and is_online:
                 logger.info(f"AIBOX back online: {name} ({ip_address})")
-                self._send_up_email(ip_address, name, hostname, timestamp, recipients)
+                self._send_up_email(ip_address, name, hostname, timestamp, recipients, aiboxes)
             else:
                 logger.info(f"AIBOX unchanged: {name} ({ip_address}) is {state}")
 
