@@ -1,0 +1,17 @@
+[Unit]
+Description=AIBOX Monitor - Connectivity Alert Service
+After=network.target
+
+[Service]
+Type=simple
+User=boxtest2
+Group=boxtest2
+ExecStart=/usr/bin/python3 /home/boxtest2/aibox-monitor/main.py
+WorkingDirectory=/home/boxtest2/aibox-monitor
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
