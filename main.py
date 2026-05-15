@@ -41,30 +41,36 @@ class AiboxMonitor:
             logger.warning(f"Failed to ping AIBOX {ip_address}: {e}")
             return False
 
-    def _send_down_email(self, ip_address: str, name: str, hostname: str, timestamp: str) -> None:
+    def _send_down_email(
+        self, ip_address: str, name: str, hostname: str, timestamp: str, recipients: list[str]
+    ) -> None:
         body = config.DOWN_BODY_TEMPLATE.format(
             hostname=hostname,
             timestamp=timestamp,
             ip=ip_address,
             name=name,
         )
-        self.email_alert.send_status_email(config.DOWN_SUBJECT, body)
+        self.email_alert.send_status_email(config.DOWN_SUBJECT, body, recipients)
 
-    def _send_up_email(self, ip_address: str, name: str, hostname: str, timestamp: str) -> None:
+    def _send_up_email(
+        self, ip_address: str, name: str, hostname: str, timestamp: str, recipients: list[str]
+    ) -> None:
         body = config.UP_BODY_TEMPLATE.format(
             hostname=hostname,
             timestamp=timestamp,
             ip=ip_address,
             name=name,
         )
-        self.email_alert.send_status_email(config.UP_SUBJECT, body)
+        self.email_alert.send_status_email(config.UP_SUBJECT, body, recipients)
 
     def check_aiboxes(self) -> None:
         hostname = socket.gethostname()
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        aiboxes = config.get_aiboxes()
+        recipients = config.get_recipient_emails()
 
         logger.info("Checking AIBOX connectivity...")
-        for ip_address, name in config.AIBOXES.items():
+        for ip_address, name in aiboxes.items():
             is_online = self._ping_host(ip_address)
             was_online = self.aibox_status.get(ip_address)
             state = "online" if is_online else "offline"
@@ -73,10 +79,10 @@ class AiboxMonitor:
                 logger.info(f"Initial AIBOX state: {name} ({ip_address}) is {state}")
             elif was_online and not is_online:
                 logger.warning(f"AIBOX offline: {name} ({ip_address})")
-                self._send_down_email(ip_address, name, hostname, timestamp)
+                self._send_down_email(ip_address, name, hostname, timestamp, recipients)
             elif not was_online and is_online:
                 logger.info(f"AIBOX back online: {name} ({ip_address})")
-                self._send_up_email(ip_address, name, hostname, timestamp)
+                self._send_up_email(ip_address, name, hostname, timestamp, recipients)
             else:
                 logger.info(f"AIBOX unchanged: {name} ({ip_address}) is {state}")
 
@@ -92,7 +98,9 @@ class AiboxMonitor:
         while self.running:
             self.check_aiboxes()
             logger.info(f"Sleeping for {config.PING_INTERVAL_SECONDS} seconds...")
-            time.sleep(config.PING_INTERVAL_SECONDS)
+            sleep_until = time.monotonic() + config.PING_INTERVAL_SECONDS
+            while self.running and time.monotonic() < sleep_until:
+                time.sleep(min(1, sleep_until - time.monotonic()))
 
     def stop(self) -> None:
         self.running = False
@@ -117,5 +125,5 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         monitor.stop()
     except Exception as e:
-        logger.error(f"Fatal error: {e}")
+        logger.exception(f"Fatal error: {e}")
         sys.exit(1)

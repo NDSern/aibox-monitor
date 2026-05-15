@@ -1,3 +1,11 @@
 .env
+.venv
+aiboxes.json
+recipients.json
 __pycache__/
 *.log
+.gitnexus
+AGENTS.md
+CLAUDE.md
+.claude
+.pytest_cache
