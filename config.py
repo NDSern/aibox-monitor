@@ -25,11 +25,13 @@ DEFAULT_AIBOXES = {
     "100.64.0.49": "Cảng Gia Vũ - Hải Phòng",
 }
 AIBOXES_FILE = os.getenv("AIBOXES_FILE", "aiboxes.json")
+AIBOX_CONFIG_FILE = os.getenv("AIBOX_CONFIG_FILE", "config.json")
 AIBOXES = DEFAULT_AIBOXES
 RECIPIENTS_FILE = os.getenv("RECIPIENTS_FILE", "recipients.json")
 RECIPIENT_EMAILS = DEFAULT_RECIPIENT_EMAILS
 
 _aiboxes_cache = DEFAULT_AIBOXES
+_aibox_config_cache = []
 _recipients_cache = DEFAULT_RECIPIENT_EMAILS
 
 
@@ -53,6 +55,33 @@ def _is_valid_recipients(value) -> bool:
         and bool(value)
         and all(isinstance(email, str) and email for email in value)
     )
+
+
+def _is_valid_target_map(value) -> bool:
+    return (
+        isinstance(value, dict)
+        and bool(value)
+        and all(isinstance(ip, str) and ip for ip in value)
+        and all(isinstance(name, str) and name for name in value.values())
+    )
+
+
+def _is_valid_aibox_config(value) -> bool:
+    return (
+        isinstance(value, dict)
+        and isinstance(value.get("name"), str)
+        and bool(value["name"])
+        and isinstance(value.get("user"), str)
+        and bool(value["user"])
+        and isinstance(value.get("ip"), str)
+        and bool(value["ip"])
+        and _is_valid_recipients(value.get("recipients"))
+        and _is_valid_target_map(value.get("targets"))
+    )
+
+
+def _is_valid_aibox_config_list(value) -> bool:
+    return isinstance(value, list) and all(_is_valid_aibox_config(item) for item in value)
 
 
 def get_aiboxes() -> dict[str, str]:
@@ -81,6 +110,38 @@ def get_recipient_emails() -> list[str]:
         logger.warning(f"Using cached recipient config after failed JSON load: {e}")
 
     return list(_recipients_cache)
+
+
+def get_aibox_configs() -> list[dict]:
+    global _aibox_config_cache
+
+    try:
+        aibox_configs = _load_json_file(AIBOX_CONFIG_FILE)
+        if not _is_valid_aibox_config_list(aibox_configs):
+            raise ValueError("AIBOX config JSON must be a list of name/user/ip/recipients/targets objects")
+        _aibox_config_cache = [
+            {
+                "name": item["name"],
+                "user": item["user"],
+                "ip": item["ip"],
+                "recipients": list(item["recipients"]),
+                "targets": dict(item["targets"]),
+            }
+            for item in aibox_configs
+        ]
+    except (OSError, json.JSONDecodeError, ValueError) as e:
+        logger.warning(f"Using cached AIBOX target config after failed JSON load: {e}")
+
+    return [
+        {
+            "name": item["name"],
+            "user": item["user"],
+            "ip": item["ip"],
+            "recipients": list(item["recipients"]),
+            "targets": dict(item["targets"]),
+        }
+        for item in _aibox_config_cache
+    ]
 
 DOWN_SUBJECT = "[CẢNH BÁO] AIBOX mất kết nối - Cảng Gia Vũ - Hải Phòng"
 DOWN_BODY_TEMPLATE = """
@@ -116,6 +177,35 @@ STATUS_SUMMARY_BODY_TEMPLATE = """
 <table style="border-collapse:collapse;width:100%;max-width:760px;">
   <tr style="background:#f3f4f6;"><th style="border:1px solid #ddd;padding:8px;text-align:left;">Trạng thái</th><th style="border:1px solid #ddd;padding:8px;text-align:left;">AIBOX</th><th style="border:1px solid #ddd;padding:8px;text-align:left;">IP</th></tr>
   {aibox_rows}
+</table>
+</body></html>
+"""
+
+TARGET_DOWN_SUBJECT = "[CẢNH BÁO] Thiết bị sau AIBOX mất kết nối - {aibox_name}"
+TARGET_DOWN_BODY_TEMPLATE = """
+<html><body style="font-family:Arial,sans-serif;color:#1f2937;">
+<h2 style="color:#b91c1c;">Thiết bị sau AIBOX mất kết nối</h2>
+<p><b>AIBOX:</b> {aibox_name}</p>
+<p><b>IP AIBOX:</b> {aibox_ip}</p>
+<p><b>Thời gian:</b> {timestamp}</p>
+<table style="border-collapse:collapse;width:100%;max-width:760px;">
+  <tr style="background:#f3f4f6;"><th style="border:1px solid #ddd;padding:8px;text-align:left;">Trạng thái</th><th style="border:1px solid #ddd;padding:8px;text-align:left;">Tên camera</th><th style="border:1px solid #ddd;padding:8px;text-align:left;">IP</th></tr>
+  {target_rows}
+</table>
+<p style="color:#b91c1c;font-weight:bold;">Vui lòng kiểm tra ngay.</p>
+</body></html>
+"""
+
+TARGET_UP_SUBJECT = "[KHÔI PHỤC] Thiết bị sau AIBOX đã kết nối lại - {aibox_name}"
+TARGET_UP_BODY_TEMPLATE = """
+<html><body style="font-family:Arial,sans-serif;color:#1f2937;">
+<h2 style="color:#15803d;">Thiết bị sau AIBOX đã kết nối lại</h2>
+<p><b>AIBOX:</b> {aibox_name}</p>
+<p><b>IP AIBOX:</b> {aibox_ip}</p>
+<p><b>Thời gian:</b> {timestamp}</p>
+<table style="border-collapse:collapse;width:100%;max-width:760px;">
+  <tr style="background:#f3f4f6;"><th style="border:1px solid #ddd;padding:8px;text-align:left;">Trạng thái</th><th style="border:1px solid #ddd;padding:8px;text-align:left;">Tên camera</th><th style="border:1px solid #ddd;padding:8px;text-align:left;">IP</th></tr>
+  {target_rows}
 </table>
 </body></html>
 """

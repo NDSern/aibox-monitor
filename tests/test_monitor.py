@@ -2,12 +2,35 @@ import config
 from main import AiboxMonitor
 
 
+def _target_config():
+    return [
+        {
+            "name": "Site 1",
+            "user": "linaro",
+            "ip": "192.0.2.10",
+            "recipients": ["ops@example.com"],
+            "targets": {"192.0.2.20": "Camera 1", "192.0.2.21": "Camera 2"},
+        }
+    ]
+
+
+def _direct_config():
+    return [
+        {
+            "name": "Box 1",
+            "user": "linaro",
+            "ip": "192.0.2.1",
+            "recipients": ["ops@example.com"],
+            "targets": {"192.0.2.20": "Camera 1"},
+        }
+    ]
+
+
 def test_initial_state_does_not_send_email(monkeypatch):
     monitor = AiboxMonitor()
     sent = []
 
-    monkeypatch.setattr(config, "get_aiboxes", lambda: {"192.0.2.1": "Box 1"})
-    monkeypatch.setattr(config, "get_recipient_emails", lambda: ["ops@example.com"])
+    monkeypatch.setattr(config, "get_aibox_configs", _direct_config)
     monkeypatch.setattr(monitor, "_ping_host", lambda ip: False)
     monkeypatch.setattr(monitor, "_send_down_email", lambda *args: sent.append(args))
 
@@ -22,8 +45,7 @@ def test_offline_transition_sends_down_email(monkeypatch):
     monitor.aibox_status = {"192.0.2.1": True}
     sent = []
 
-    monkeypatch.setattr(config, "get_aiboxes", lambda: {"192.0.2.1": "Box 1"})
-    monkeypatch.setattr(config, "get_recipient_emails", lambda: ["ops@example.com"])
+    monkeypatch.setattr(config, "get_aibox_configs", _direct_config)
     monkeypatch.setattr(monitor, "_ping_host", lambda ip: False)
     monkeypatch.setattr(monitor, "_send_down_email", lambda *args: sent.append(args))
 
@@ -41,8 +63,7 @@ def test_recovery_transition_sends_up_email(monkeypatch):
     monitor.aibox_status = {"192.0.2.1": False}
     sent = []
 
-    monkeypatch.setattr(config, "get_aiboxes", lambda: {"192.0.2.1": "Box 1"})
-    monkeypatch.setattr(config, "get_recipient_emails", lambda: ["ops@example.com"])
+    monkeypatch.setattr(config, "get_aibox_configs", _direct_config)
     monkeypatch.setattr(monitor, "_ping_host", lambda ip: True)
     monkeypatch.setattr(monitor, "_send_up_email", lambda *args: sent.append(args))
 
@@ -60,8 +81,7 @@ def test_unchanged_state_does_not_send_email(monkeypatch):
     monitor.aibox_status = {"192.0.2.1": True}
     sent = []
 
-    monkeypatch.setattr(config, "get_aiboxes", lambda: {"192.0.2.1": "Box 1"})
-    monkeypatch.setattr(config, "get_recipient_emails", lambda: ["ops@example.com"])
+    monkeypatch.setattr(config, "get_aibox_configs", _direct_config)
     monkeypatch.setattr(monitor, "_ping_host", lambda ip: True)
     monkeypatch.setattr(monitor, "_send_down_email", lambda *args: sent.append(args))
     monkeypatch.setattr(monitor, "_send_up_email", lambda *args: sent.append(args))
@@ -79,10 +99,13 @@ def test_multiple_status_changes_send_multiple_emails(monkeypatch):
 
     monkeypatch.setattr(
         config,
-        "get_aiboxes",
-        lambda: {"192.0.2.1": "Box 1", "192.0.2.2": "Box 2", "192.0.2.3": "Box 3"},
+        "get_aibox_configs",
+        lambda: [
+            {"name": "Box 1", "user": "u", "ip": "192.0.2.1", "recipients": ["ops@example.com"], "targets": {"192.0.2.20": "Camera"}},
+            {"name": "Box 2", "user": "u", "ip": "192.0.2.2", "recipients": ["ops@example.com"], "targets": {"192.0.2.21": "Camera"}},
+            {"name": "Box 3", "user": "u", "ip": "192.0.2.3", "recipients": ["ops@example.com"], "targets": {"192.0.2.22": "Camera"}},
+        ],
     )
-    monkeypatch.setattr(config, "get_recipient_emails", lambda: ["ops@example.com"])
     monkeypatch.setattr(
         monitor,
         "_ping_host",
@@ -102,8 +125,7 @@ def test_status_summary_sends_after_interval(monkeypatch):
     monitor.next_status_summary_at = 100.0
     sent = []
 
-    monkeypatch.setattr(config, "get_aiboxes", lambda: {"192.0.2.1": "Box 1"})
-    monkeypatch.setattr(config, "get_recipient_emails", lambda: ["ops@example.com"])
+    monkeypatch.setattr(config, "get_aibox_configs", _direct_config)
     monkeypatch.setattr(monitor, "_ping_host", lambda ip: True)
     monkeypatch.setattr("main.time.monotonic", lambda: 100.0)
     monkeypatch.setattr(monitor, "_send_status_summary_email", lambda *args: sent.append(args))
@@ -121,8 +143,7 @@ def test_status_summary_waits_before_interval(monkeypatch):
     monitor.next_status_summary_at = 101.0
     sent = []
 
-    monkeypatch.setattr(config, "get_aiboxes", lambda: {"192.0.2.1": "Box 1"})
-    monkeypatch.setattr(config, "get_recipient_emails", lambda: ["ops@example.com"])
+    monkeypatch.setattr(config, "get_aibox_configs", _direct_config)
     monkeypatch.setattr(monitor, "_ping_host", lambda ip: True)
     monkeypatch.setattr("main.time.monotonic", lambda: 100.0)
     monkeypatch.setattr(monitor, "_send_status_summary_email", lambda *args: sent.append(args))
@@ -201,3 +222,101 @@ def test_send_status_summary_email_uses_real_template(monkeypatch):
     assert "Box 2" in body
     assert "Đang kết nối" in body
     assert "Mất kết nối" in body
+
+
+def test_check_aibox_targets_skips_when_parent_offline(monkeypatch):
+    monitor = AiboxMonitor()
+    sent = []
+
+    monkeypatch.setattr(config, "get_aibox_configs", _target_config)
+    monkeypatch.setattr(monitor, "_ping_host", lambda ip: False)
+    monkeypatch.setattr(monitor, "_can_ssh", lambda *args: True)
+    monkeypatch.setattr(monitor, "_ping_target_from_aibox", lambda *args: True)
+    monkeypatch.setattr(monitor, "_send_target_down_email", lambda *args: sent.append(args))
+
+    monitor.check_aibox_targets()
+
+    assert sent == []
+    assert monitor.target_status == {}
+
+
+def test_check_aibox_targets_skips_when_ssh_unavailable(monkeypatch):
+    monitor = AiboxMonitor()
+    monitor.aibox_status = {"192.0.2.10": True}
+    sent = []
+
+    monkeypatch.setattr(config, "get_aibox_configs", _target_config)
+    monkeypatch.setattr(monitor, "_ping_host", lambda ip: True)
+    monkeypatch.setattr(monitor, "_can_ssh", lambda *args: False)
+    monkeypatch.setattr(monitor, "_ping_target_from_aibox", lambda *args: True)
+    monkeypatch.setattr(monitor, "_send_target_down_email", lambda *args: sent.append(args))
+
+    monitor.check_aibox_targets()
+
+    assert sent == []
+    assert monitor.target_status == {}
+
+
+def test_check_aibox_targets_skips_ssh_when_target_not_locally_pingable(monkeypatch):
+    monitor = AiboxMonitor()
+    monitor.aibox_status = {"192.0.2.10": True}
+    ssh_pings = []
+
+    monkeypatch.setattr(config, "get_aibox_configs", _target_config)
+    monkeypatch.setattr(monitor, "_ping_host", lambda ip: ip == "192.0.2.10")
+    monkeypatch.setattr(monitor, "_can_ssh", lambda *args: True)
+    monkeypatch.setattr(monitor, "_ping_target_from_aibox", lambda *args: ssh_pings.append(args) or True)
+
+    monitor.check_aibox_targets()
+
+    assert ssh_pings == []
+    assert monitor.target_status == {}
+
+
+def test_check_aibox_targets_sends_transition_emails(monkeypatch):
+    monitor = AiboxMonitor()
+    monitor.target_status = {
+        "192.0.2.10:192.0.2.20": True,
+        "192.0.2.10:192.0.2.21": False,
+    }
+    monitor.aibox_status = {"192.0.2.10": True}
+    down = []
+    up = []
+
+    monkeypatch.setattr(config, "get_aibox_configs", _target_config)
+    monkeypatch.setattr(monitor, "_ping_host", lambda ip: True)
+    monkeypatch.setattr(monitor, "_can_ssh", lambda *args: True)
+    monkeypatch.setattr(
+        monitor,
+        "_ping_target_from_aibox",
+        lambda user, aibox_ip, target_ip: {"192.0.2.20": False, "192.0.2.21": True}[target_ip],
+    )
+    monkeypatch.setattr(monitor, "_send_target_down_email", lambda *args: down.append(args))
+    monkeypatch.setattr(monitor, "_send_target_up_email", lambda *args: up.append(args))
+
+    monitor.check_aibox_targets()
+
+    assert down[0][2] == {"192.0.2.20": "Mất kết nối"}
+    assert up[0][2] == {"192.0.2.21": "Đã kết nối lại"}
+    assert monitor.target_status == {
+        "192.0.2.10:192.0.2.20": False,
+        "192.0.2.10:192.0.2.21": True,
+    }
+
+
+def test_send_target_down_email_uses_monitoring_camera_format(monkeypatch):
+    monitor = AiboxMonitor()
+    sent = []
+    monkeypatch.setattr(monitor.email_alert, "send_status_email", lambda *args: sent.append(args))
+    monitor.target_status = {"192.0.2.10:192.0.2.20": False, "192.0.2.10:192.0.2.21": True}
+
+    monitor._send_target_down_email(_target_config()[0], "2026-05-15 10:00:00", {"192.0.2.20": "Mất kết nối"})
+
+    subject, body, recipients = sent[0]
+    assert subject == "[CẢNH BÁO] Thiết bị sau AIBOX mất kết nối - Site 1"
+    assert recipients == ["ops@example.com"]
+    assert "font-family:Arial,sans-serif;color:#1f2937" in body
+    assert "Tên camera" in body
+    assert "Site 1" in body
+    assert "Camera 1" in body
+    assert "#fef2f2" in body

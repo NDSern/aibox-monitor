@@ -3,6 +3,18 @@ import json
 import config
 
 
+def _valid_aibox_config():
+    return [
+        {
+            "name": "Site 1",
+            "user": "linaro",
+            "ip": "192.0.2.10",
+            "recipients": ["ops@example.com"],
+            "targets": {"192.0.2.20": "Camera 1"},
+        }
+    ]
+
+
 def test_get_aiboxes_reads_valid_json(tmp_path, monkeypatch):
     path = tmp_path / "aiboxes.json"
     path.write_text(json.dumps({"192.0.2.1": "Box 1"}), encoding="utf-8")
@@ -67,3 +79,40 @@ def test_config_readers_return_cache_copies(tmp_path, monkeypatch):
 
     assert config.get_aiboxes() == {"192.0.2.1": "Box 1"}
     assert config.get_recipient_emails() == ["ops@example.com"]
+
+
+def test_get_aibox_configs_reads_valid_json(tmp_path, monkeypatch):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(_valid_aibox_config()), encoding="utf-8")
+
+    monkeypatch.setattr(config, "AIBOX_CONFIG_FILE", str(path))
+    monkeypatch.setattr(config, "_aibox_config_cache", [])
+
+    assert config.get_aibox_configs() == _valid_aibox_config()
+
+
+def test_get_aibox_configs_keeps_last_good_on_invalid_json(tmp_path, monkeypatch):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(_valid_aibox_config()), encoding="utf-8")
+
+    monkeypatch.setattr(config, "AIBOX_CONFIG_FILE", str(path))
+    monkeypatch.setattr(config, "_aibox_config_cache", [])
+
+    assert config.get_aibox_configs() == _valid_aibox_config()
+
+    path.write_text(json.dumps([{"name": "bad"}]), encoding="utf-8")
+
+    assert config.get_aibox_configs() == _valid_aibox_config()
+
+
+def test_get_aibox_configs_returns_cache_copies(tmp_path, monkeypatch):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(_valid_aibox_config()), encoding="utf-8")
+
+    monkeypatch.setattr(config, "AIBOX_CONFIG_FILE", str(path))
+
+    aibox_configs = config.get_aibox_configs()
+    aibox_configs[0]["recipients"].append("other@example.com")
+    aibox_configs[0]["targets"]["192.0.2.21"] = "Camera 2"
+
+    assert config.get_aibox_configs() == _valid_aibox_config()
