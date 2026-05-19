@@ -26,6 +26,7 @@ class AiboxMonitor:
     def __init__(self):
         self.email_alert = EmailAlert()
         self.aibox_status = {}
+        self.next_status_summary_at = time.monotonic() + config.STATUS_SUMMARY_INTERVAL_SECONDS
         self.running = False
 
     @staticmethod
@@ -56,7 +57,7 @@ class AiboxMonitor:
             timestamp=timestamp,
             ip=ip_address,
             name=name,
-            aibox_rows=self._build_aibox_rows(aiboxes, ip_address, "Mất kết nối", "#fee2e2", "#b91c1c"),
+            aibox_rows=self._build_aibox_rows(aiboxes, self.aibox_status, {ip_address: "Mất kết nối"}),
         )
         self.email_alert.send_status_email(config.DOWN_SUBJECT, body, recipients)
 
@@ -74,24 +75,49 @@ class AiboxMonitor:
             timestamp=timestamp,
             ip=ip_address,
             name=name,
-            aibox_rows=self._build_aibox_rows(aiboxes, ip_address, "Đã kết nối lại", "#dcfce7", "#15803d"),
+            aibox_rows=self._build_aibox_rows(aiboxes, self.aibox_status, {ip_address: "Đã kết nối lại"}),
         )
         self.email_alert.send_status_email(config.UP_SUBJECT, body, recipients)
 
+    def _send_status_summary_email(
+        self,
+        timestamp: str,
+        recipients: list[str],
+        aiboxes: dict[str, str],
+    ) -> None:
+        body = config.STATUS_SUMMARY_BODY_TEMPLATE.format(
+            timestamp=timestamp,
+            aibox_rows=self._build_aibox_rows(
+                aiboxes, self.aibox_status, {}
+            ),
+        )
+        self.email_alert.send_status_email(config.STATUS_SUMMARY_SUBJECT, body, recipients)
+
     @staticmethod
     def _build_aibox_rows(
-        aiboxes: dict[str, str], changed_ip: str, changed_status: str, highlight_bg: str, status_color: str
+        aiboxes: dict[str, str],
+        aibox_status: dict[str, bool],
+        changed_statuses: dict[str, str],
     ) -> str:
         rows = []
         for ip_address, name in aiboxes.items():
-            is_changed = ip_address == changed_ip
+            changed_status = changed_statuses.get(ip_address)
             cell_style = "border:1px solid #ddd;padding:8px;"
-            if is_changed:
+            if changed_status:
+                highlight_bg = "#fee2e2" if changed_status == "Mất kết nối" else "#dcfce7"
                 cell_style += f"background:{highlight_bg};font-weight:bold;"
-            status_style = cell_style
-            if is_changed:
-                status_style += f"color:{status_color};"
-            status = changed_status if is_changed else "Không thay đổi"
+            if changed_status:
+                status = changed_status
+                status_color = "#b91c1c" if changed_status == "Mất kết nối" else "#15803d"
+                status_style = cell_style + f"color:{status_color};"
+            elif ip_address in aibox_status:
+                is_online = aibox_status[ip_address]
+                status = "Đang kết nối" if is_online else "Mất kết nối"
+                color = "#15803d" if is_online else "#b91c1c"
+                status_style = cell_style + f"color:{color};font-weight:bold;"
+            else:
+                status = "Chưa ghi nhận"
+                status_style = cell_style + "color:#6b7280;font-weight:bold;"
             rows.append(
                 "<tr>"
                 f'<td style="{status_style}">{escape(status)}</td>'
@@ -125,6 +151,12 @@ class AiboxMonitor:
                 logger.info(f"AIBOX unchanged: {name} ({ip_address}) is {state}")
 
             self.aibox_status[ip_address] = is_online
+
+        now = time.monotonic()
+        if now >= self.next_status_summary_at:
+            logger.info("Sending scheduled AIBOX status summary email")
+            self._send_status_summary_email(timestamp, recipients, aiboxes)
+            self.next_status_summary_at = now + config.STATUS_SUMMARY_INTERVAL_SECONDS
 
     def run(self) -> None:
         self.running = True

@@ -9,3 +9,4 @@ AGENTS.md
 CLAUDE.md
 .claude
 .pytest_cache
+config.json

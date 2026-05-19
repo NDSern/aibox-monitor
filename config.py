@@ -9,12 +9,7 @@ logger = logging.getLogger(__name__)
 
 PING_INTERVAL_SECONDS = 3 * 60
 PING_TIMEOUT_SECONDS = 2
-
-DEFAULT_AIBOXES = {
-    "100.64.0.49": "Cảng Gia Vũ - Hải Phòng",
-}
-AIBOXES_FILE = os.getenv("AIBOXES_FILE", "aiboxes.json")
-AIBOXES = DEFAULT_AIBOXES
+STATUS_SUMMARY_INTERVAL_SECONDS = 6 * 60 * 60
 
 EMAIL_ENABLED = True
 SMTP_SERVER = "smtp.office365.com"
@@ -26,6 +21,11 @@ DEFAULT_RECIPIENT_EMAILS = [
     "sondn@vns.ai.vn",
     "huylq@vns.ai.vn",
 ]
+DEFAULT_AIBOXES = {
+    "100.64.0.49": "Cảng Gia Vũ - Hải Phòng",
+}
+AIBOXES_FILE = os.getenv("AIBOXES_FILE", "aiboxes.json")
+AIBOXES = DEFAULT_AIBOXES
 RECIPIENTS_FILE = os.getenv("RECIPIENTS_FILE", "recipients.json")
 RECIPIENT_EMAILS = DEFAULT_RECIPIENT_EMAILS
 
@@ -100,6 +100,19 @@ UP_BODY_TEMPLATE = """
 <html><body style="font-family:Arial,sans-serif;color:#1f2937;">
 <h2 style="color:#15803d;">AIBOX đã kết nối lại</h2>
 <p><b>Thời gian:</b> {timestamp}</p>
+<table style="border-collapse:collapse;width:100%;max-width:760px;">
+  <tr style="background:#f3f4f6;"><th style="border:1px solid #ddd;padding:8px;text-align:left;">Trạng thái</th><th style="border:1px solid #ddd;padding:8px;text-align:left;">AIBOX</th><th style="border:1px solid #ddd;padding:8px;text-align:left;">IP</th></tr>
+  {aibox_rows}
+</table>
+</body></html>
+"""
+
+STATUS_SUMMARY_SUBJECT = "[BÁO CÁO] Trạng thái AIBOX hiện tại - Cảng Gia Vũ - Hải Phòng"
+STATUS_SUMMARY_BODY_TEMPLATE = """
+<html><body style="font-family:Arial,sans-serif;color:#1f2937;">
+<h2 style="color:#1d4ed8;">Trạng thái AIBOX hiện tại</h2>
+<p><b>Thời gian:</b> {timestamp}</p>
+<p>Báo cáo tự động sau mỗi 6 giờ.</p>
 <table style="border-collapse:collapse;width:100%;max-width:760px;">
   <tr style="background:#f3f4f6;"><th style="border:1px solid #ddd;padding:8px;text-align:left;">Trạng thái</th><th style="border:1px solid #ddd;padding:8px;text-align:left;">AIBOX</th><th style="border:1px solid #ddd;padding:8px;text-align:left;">IP</th></tr>
   {aibox_rows}
