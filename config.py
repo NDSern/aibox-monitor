@@ -10,6 +10,9 @@ logger = logging.getLogger(__name__)
 PING_INTERVAL_SECONDS = 3 * 60
 PING_TIMEOUT_SECONDS = 2
 STATUS_SUMMARY_INTERVAL_SECONDS = 6 * 60 * 60
+CPU_THRESHOLD = 90
+RAM_THRESHOLD = 90
+NPU_THRESHOLD = 90
 
 EMAIL_ENABLED = True
 SMTP_SERVER = "smtp.office365.com"
@@ -60,28 +63,68 @@ def _is_valid_recipients(value) -> bool:
 def _is_valid_target_map(value) -> bool:
     return (
         isinstance(value, dict)
-        and bool(value)
         and all(isinstance(ip, str) and ip for ip in value)
         and all(isinstance(name, str) and name for name in value.values())
     )
 
 
 def _is_valid_aibox_config(value) -> bool:
-    return (
+    return _aibox_config_error(value) is None
+
+
+def _aibox_config_error(value) -> str | None:
+    if not (
         isinstance(value, dict)
         and isinstance(value.get("name"), str)
         and bool(value["name"])
-        and isinstance(value.get("user"), str)
-        and bool(value["user"])
-        and isinstance(value.get("ip"), str)
-        and bool(value["ip"])
-        and _is_valid_recipients(value.get("recipients"))
-        and _is_valid_target_map(value.get("targets"))
-    )
+    ):
+        return "must be an object with non-empty name"
+
+    if not _is_valid_recipients(value.get("recipients")):
+        return "recipients must be a non-empty list of email strings"
+
+    if "targets" in value and not _is_valid_target_map(value["targets"]):
+        return "targets must be an object of IP/name strings"
+
+    check_devices = value.get("check-devices", False)
+    if not isinstance(check_devices, bool):
+        return "check-devices must be a boolean when present"
+
+    check_resource = value.get("check-resource", False)
+    if not isinstance(check_resource, bool):
+        return "check-resource must be a boolean when present"
+
+    local = value.get("local", False)
+    if not isinstance(local, bool):
+        return "local must be a boolean when present"
+
+    if local:
+        return None
+
+    if not check_devices and not check_resource:
+        return None
+
+    if not (isinstance(value.get("user"), str) and bool(value["user"])):
+        return "non-local enabled checks require non-empty user"
+    if not (isinstance(value.get("ip"), str) and bool(value["ip"])):
+        return "non-local enabled checks require non-empty ip"
+
+    return None
 
 
 def _is_valid_aibox_config_list(value) -> bool:
     return isinstance(value, list) and all(_is_valid_aibox_config(item) for item in value)
+
+
+def _aibox_config_list_error(value) -> str | None:
+    if not isinstance(value, list):
+        return "top-level config must be a list"
+    for index, item in enumerate(value):
+        error = _aibox_config_error(item)
+        if error:
+            name = item.get("name", "<unknown>") if isinstance(item, dict) else "<not object>"
+            return f"item {index} ({name}): {error}"
+    return None
 
 
 def get_aiboxes() -> dict[str, str]:
@@ -117,15 +160,19 @@ def get_aibox_configs() -> list[dict]:
 
     try:
         aibox_configs = _load_json_file(AIBOX_CONFIG_FILE)
-        if not _is_valid_aibox_config_list(aibox_configs):
-            raise ValueError("AIBOX config JSON must be a list of name/user/ip/recipients/targets objects")
+        config_error = _aibox_config_list_error(aibox_configs)
+        if config_error:
+            raise ValueError(f"AIBOX config JSON invalid: {config_error}")
         _aibox_config_cache = [
             {
                 "name": item["name"],
-                "user": item["user"],
-                "ip": item["ip"],
+                "check-devices": item.get("check-devices", False),
+                "check-resource": item.get("check-resource", False),
+                "local": item.get("local", False),
+                "user": item.get("user", ""),
+                "ip": item.get("ip", ""),
                 "recipients": list(item["recipients"]),
-                "targets": dict(item["targets"]),
+                "targets": dict(item.get("targets", {})),
             }
             for item in aibox_configs
         ]
@@ -135,10 +182,13 @@ def get_aibox_configs() -> list[dict]:
     return [
         {
             "name": item["name"],
-            "user": item["user"],
-            "ip": item["ip"],
+            "check-devices": item.get("check-devices", False),
+            "check-resource": item.get("check-resource", False),
+            "local": item.get("local", False),
+            "user": item.get("user", ""),
+            "ip": item.get("ip", ""),
             "recipients": list(item["recipients"]),
-            "targets": dict(item["targets"]),
+            "targets": dict(item.get("targets", {})),
         }
         for item in _aibox_config_cache
     ]
@@ -161,6 +211,20 @@ UP_BODY_TEMPLATE = """
 <html><body style="font-family:Arial,sans-serif;color:#1f2937;">
 <h2 style="color:#15803d;">AIBOX đã kết nối lại</h2>
 <p><b>Thời gian:</b> {timestamp}</p>
+<table style="border-collapse:collapse;width:100%;max-width:760px;">
+  <tr style="background:#f3f4f6;"><th style="border:1px solid #ddd;padding:8px;text-align:left;">Trạng thái</th><th style="border:1px solid #ddd;padding:8px;text-align:left;">AIBOX</th><th style="border:1px solid #ddd;padding:8px;text-align:left;">IP</th></tr>
+  {aibox_rows}
+</table>
+</body></html>
+"""
+
+AIBOX_STATUS_CHANGE_SUBJECT = "[{prefix}] Tổng hợp thay đổi trạng thái AIBOX - {scope_name}"
+AIBOX_STATUS_CHANGE_BODY_TEMPLATE = """
+<html><body style="font-family:Arial,sans-serif;color:#1f2937;">
+<h2 style="color:{heading_color};">Tổng hợp thay đổi trạng thái AIBOX</h2>
+<p><b>Phạm vi:</b> {scope_name}</p>
+<p><b>Thời gian:</b> {timestamp}</p>
+<p><b>Số thay đổi:</b> {change_count}</p>
 <table style="border-collapse:collapse;width:100%;max-width:760px;">
   <tr style="background:#f3f4f6;"><th style="border:1px solid #ddd;padding:8px;text-align:left;">Trạng thái</th><th style="border:1px solid #ddd;padding:8px;text-align:left;">AIBOX</th><th style="border:1px solid #ddd;padding:8px;text-align:left;">IP</th></tr>
   {aibox_rows}
@@ -207,6 +271,55 @@ TARGET_UP_BODY_TEMPLATE = """
   <tr style="background:#f3f4f6;"><th style="border:1px solid #ddd;padding:8px;text-align:left;">Trạng thái</th><th style="border:1px solid #ddd;padding:8px;text-align:left;">Tên camera</th><th style="border:1px solid #ddd;padding:8px;text-align:left;">IP</th></tr>
   {target_rows}
 </table>
+</body></html>
+"""
+
+TARGET_STATUS_CHANGE_SUBJECT = "[{prefix}] Tổng hợp thay đổi trạng thái thiết bị sau AIBOX - {aibox_name}"
+TARGET_STATUS_CHANGE_BODY_TEMPLATE = """
+<html><body style="font-family:Arial,sans-serif;color:#1f2937;">
+<h2 style="color:{heading_color};">Tổng hợp thay đổi trạng thái thiết bị sau AIBOX</h2>
+<p><b>AIBOX:</b> {aibox_name}</p>
+<p><b>IP AIBOX:</b> {aibox_ip}</p>
+<p><b>Thời gian:</b> {timestamp}</p>
+<p><b>Số thay đổi:</b> {change_count}</p>
+<table style="border-collapse:collapse;width:100%;max-width:760px;">
+  <tr style="background:#f3f4f6;"><th style="border:1px solid #ddd;padding:8px;text-align:left;">Trạng thái</th><th style="border:1px solid #ddd;padding:8px;text-align:left;">Tên camera</th><th style="border:1px solid #ddd;padding:8px;text-align:left;">IP</th></tr>
+  {target_rows}
+</table>
+</body></html>
+"""
+
+TARGET_RECOVERY_CHECK_RESULT_SUBJECT = "[THÔNG TIN] Kết quả kiểm tra thiết bị sau khi AIBOX khôi phục - {aibox_name}"
+TARGET_RECOVERY_CHECK_RESULT_BODY_TEMPLATE = """
+<html><body style="font-family:Arial,sans-serif;color:#1f2937;">
+<h2 style="color:#1d4ed8;">Kết quả kiểm tra thiết bị sau khi AIBOX khôi phục</h2>
+<p><b>AIBOX:</b> {aibox_name}</p>
+<p><b>IP AIBOX:</b> {aibox_ip}</p>
+<p><b>Thời gian:</b> {timestamp}</p>
+<p><b>Số thiết bị:</b> {target_count}</p>
+<p><b>Số thay đổi:</b> {change_count}</p>
+{note_html}
+<table style="border-collapse:collapse;width:100%;max-width:760px;">
+  <tr style="background:#f3f4f6;"><th style="border:1px solid #ddd;padding:8px;text-align:left;">Trạng thái</th><th style="border:1px solid #ddd;padding:8px;text-align:left;">Tên camera</th><th style="border:1px solid #ddd;padding:8px;text-align:left;">IP</th></tr>
+  {target_rows}
+</table>
+</body></html>
+"""
+
+RESOURCE_ALERT_SUBJECT = "[CẢNH BÁO] Tài nguyên AIBOX vượt ngưỡng - {hostname}"
+RESOURCE_ALERT_BODY_TEMPLATE = """
+<html><body style="font-family:Arial,sans-serif;color:#1f2937;">
+<h2 style="color:#b91c1c;">Cảnh báo tài nguyên AIBOX vượt ngưỡng</h2>
+<p><b>AIBOX:</b> {hostname}</p>
+<p><b>Thời gian:</b> {timestamp}</p>
+<p><b>Tài nguyên vượt ngưỡng:</b> {resource_name}</p>
+<p><b>Mức sử dụng cao nhất:</b> {usage:.1f}%</p>
+<p><b>Ngưỡng cảnh báo:</b> {threshold}%</p>
+<table style="border-collapse:collapse;width:100%;max-width:760px;">
+  <tr style="background:#f3f4f6;"><th style="border:1px solid #ddd;padding:8px;text-align:left;">Tài nguyên</th><th style="border:1px solid #ddd;padding:8px;text-align:left;">Mức sử dụng</th><th style="border:1px solid #ddd;padding:8px;text-align:left;">Ngưỡng</th><th style="border:1px solid #ddd;padding:8px;text-align:left;">Trạng thái</th></tr>
+  {resource_rows}
+</table>
+<p style="color:#b91c1c;font-weight:bold;">Vui lòng kiểm tra ngay.</p>
 </body></html>
 """
 

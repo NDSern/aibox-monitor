@@ -1,0 +1,46 @@
+[
+    {
+        "name": "Kiểm tra trạng thái các Thiet bi",
+        "check-devices": true,
+        "check-resource": false,
+        "local": true,
+        "recipients": [
+            "example@mail.com"
+        ],
+        "targets": {
+            "100.66.0.3":"Rasp Pi",
+            "100.66.0.2":"AI Device"
+        }
+    },
+    {
+        "name": "Rasp Pi",
+        "check-devices": false,
+        "check-resource": true,
+        "user": "example",
+        "ip": "100.66.0.3",
+        "recipients": [
+            "example@mail.com"
+        ],
+        "targets": {
+        }
+
+    },
+    {
+        "name": "AI Device",
+        "check-devices": true,
+        "check-resource": true,
+        "user": "vta-portmaster1",
+        "ip": "100.66.0.2",
+        "recipients": [
+            "example@mail.com"
+        ],
+        "targets": {
+            "192.168.1.201":"Cam HikVision",
+            "192.168.1.202":"Cam HikVision",
+            "192.168.1.203":"Cam HikVision",
+            "192.168.1.204":"Cam HikVision",
+            "192.168.1.205":"Cam HikVision",
+            "192.168.1.206":"Cam HikVision"
+        }
+    }
+]

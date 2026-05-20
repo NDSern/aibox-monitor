@@ -1,4 +1,5 @@
 import logging
+import json
 import signal
 import socket
 import subprocess
@@ -95,6 +96,20 @@ class AiboxMonitor:
         self.email_alert.send_status_email(config.STATUS_SUMMARY_SUBJECT, body, recipients)
 
     @staticmethod
+    def _change_email_style(changed_statuses: dict[str, str]) -> tuple[str, str]:
+        if changed_statuses and all(status == "Đã kết nối lại" for status in changed_statuses.values()):
+            return "KHÔI PHỤC", "#15803d"
+        return "CẢNH BÁO", "#b91c1c"
+
+    @staticmethod
+    def _group_recipients(aibox_configs: list[dict]) -> dict[tuple[str, ...], list[dict]]:
+        groups = {}
+        for aibox in aibox_configs:
+            key = tuple(aibox["recipients"])
+            groups.setdefault(key, []).append(aibox)
+        return groups
+
+    @staticmethod
     def _target_key(aibox_ip: str, target_ip: str) -> str:
         return f"{aibox_ip}:{target_ip}"
 
@@ -153,6 +168,93 @@ class AiboxMonitor:
         except (subprocess.TimeoutExpired, OSError) as e:
             logger.warning(f"Failed to ping target {target_ip} from AIBOX {aibox_ip}: {e}")
             return False
+
+    @staticmethod
+    def _collect_resources_from_aibox(user: str, aibox_ip: str) -> dict[str, float] | None:
+        script = r'''
+import json
+import time
+
+def read_cpu():
+    with open('/proc/stat', encoding='utf-8') as f:
+        parts = [int(x) for x in f.readline().split()[1:]]
+    idle = parts[3] + parts[4]
+    total = sum(parts)
+    return idle, total
+
+def cpu_percent():
+    idle1, total1 = read_cpu()
+    time.sleep(1)
+    idle2, total2 = read_cpu()
+    total_delta = total2 - total1
+    idle_delta = idle2 - idle1
+    if total_delta <= 0:
+        return 0.0
+    return max(0.0, min(100.0, (1 - idle_delta / total_delta) * 100))
+
+def ram_percent():
+    values = {}
+    with open('/proc/meminfo', encoding='utf-8') as f:
+        for line in f:
+            key, value = line.split(':', 1)
+            values[key] = int(value.strip().split()[0])
+    total = values.get('MemTotal', 0)
+    available = values.get('MemAvailable', 0)
+    if total <= 0:
+        return 0.0
+    return max(0.0, min(100.0, (total - available) / total * 100))
+
+def npu_percent(path):
+    try:
+        with open(path, encoding='utf-8') as f:
+            return float(f.read().strip())
+    except (OSError, ValueError):
+        return 0.0
+
+print(json.dumps({
+    'CPU': cpu_percent(),
+    'RAM': ram_percent(),
+    'NPU Core 0': npu_percent('/sys/class/misc/rknpu/load0'),
+    'NPU Core 1': npu_percent('/sys/class/misc/rknpu/load1'),
+    'NPU Core 2': npu_percent('/sys/class/misc/rknpu/load2'),
+}))
+'''
+        try:
+            result = subprocess.run(
+                [
+                    "ssh",
+                    "-o",
+                    "BatchMode=yes",
+                    "-o",
+                    "ConnectTimeout=5",
+                    "-o",
+                    "StrictHostKeyChecking=accept-new",
+                    f"{user}@{aibox_ip}",
+                    "python3",
+                    "-",
+                ],
+                input=script,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=20,
+            )
+            if result.returncode != 0:
+                logger.warning(f"Failed to collect resources from {user}@{aibox_ip}: {result.stderr.strip()}")
+                return None
+            data = json.loads(result.stdout)
+            return {name: float(value) for name, value in data.items()}
+        except (subprocess.TimeoutExpired, OSError, json.JSONDecodeError, ValueError) as e:
+            logger.warning(f"Failed resource collection for {user}@{aibox_ip}: {e}")
+            return None
+
+    @staticmethod
+    def _resource_threshold(resource_name: str) -> int:
+        if resource_name == "CPU":
+            return config.CPU_THRESHOLD
+        if resource_name == "RAM":
+            return config.RAM_THRESHOLD
+        return config.NPU_THRESHOLD
 
     @staticmethod
     def _build_target_rows(
@@ -217,6 +319,110 @@ class AiboxMonitor:
             config.TARGET_UP_SUBJECT.format(aibox_name=aibox["name"]), body, aibox["recipients"]
         )
 
+    def _send_aibox_status_change_email(
+        self,
+        aibox: dict,
+        timestamp: str,
+        changed_statuses: dict[str, str],
+    ) -> None:
+        prefix, heading_color = self._change_email_style(changed_statuses)
+        body = config.AIBOX_STATUS_CHANGE_BODY_TEMPLATE.format(
+            scope_name=aibox["name"],
+            timestamp=timestamp,
+            change_count=len(changed_statuses),
+            heading_color=heading_color,
+            aibox_rows=self._build_aibox_rows(aibox["targets"], self.aibox_status, changed_statuses),
+        )
+        self.email_alert.send_status_email(
+            config.AIBOX_STATUS_CHANGE_SUBJECT.format(prefix=prefix, scope_name=aibox["name"]),
+            body,
+            aibox["recipients"],
+        )
+
+    def _send_target_status_change_email(
+        self,
+        aibox: dict,
+        timestamp: str,
+        changed_statuses: dict[str, str],
+    ) -> None:
+        prefix, heading_color = self._change_email_style(changed_statuses)
+        body = config.TARGET_STATUS_CHANGE_BODY_TEMPLATE.format(
+            aibox_name=aibox["name"],
+            aibox_ip=aibox["ip"],
+            timestamp=timestamp,
+            change_count=len(changed_statuses),
+            heading_color=heading_color,
+            target_rows=self._build_target_rows(aibox["targets"], self.target_status, changed_statuses, aibox["ip"]),
+        )
+        self.email_alert.send_status_email(
+            config.TARGET_STATUS_CHANGE_SUBJECT.format(prefix=prefix, aibox_name=aibox["name"]),
+            body,
+            aibox["recipients"],
+        )
+
+    def _send_target_recovery_check_result_email(
+        self,
+        aibox: dict,
+        timestamp: str,
+        changed_statuses: dict[str, str],
+        note: str = "",
+    ) -> None:
+        note_html = f'<p style="color:#6b7280;"><b>Ghi chú:</b> {escape(note)}</p>' if note else ""
+        body = config.TARGET_RECOVERY_CHECK_RESULT_BODY_TEMPLATE.format(
+            aibox_name=aibox["name"],
+            aibox_ip=aibox["ip"],
+            timestamp=timestamp,
+            target_count=len(aibox["targets"]),
+            change_count=len(changed_statuses),
+            note_html=note_html,
+            target_rows=self._build_target_rows(aibox["targets"], self.target_status, changed_statuses, aibox["ip"]),
+        )
+        self.email_alert.send_status_email(
+            config.TARGET_RECOVERY_CHECK_RESULT_SUBJECT.format(aibox_name=aibox["name"]),
+            body,
+            aibox["recipients"],
+        )
+
+    @staticmethod
+    def _build_resource_rows(resources: dict[str, float], over_threshold: dict[str, float]) -> str:
+        rows = []
+        for resource_name in ["CPU", "RAM", "NPU Core 0", "NPU Core 1", "NPU Core 2"]:
+            usage = resources.get(resource_name, 0.0)
+            threshold = AiboxMonitor._resource_threshold(resource_name)
+            is_alert = resource_name in over_threshold
+            bg = "background:#fee2e2;" if is_alert else ""
+            color = "#b91c1c" if is_alert else "#15803d"
+            status = "Vượt ngưỡng" if is_alert else "Bình thường"
+            rows.append(
+                f'<tr style="{bg}">'
+                f'<td style="border:1px solid #ddd;padding:8px;font-weight:bold;">{escape(resource_name)}</td>'
+                f'<td style="border:1px solid #ddd;padding:8px;color:{color};font-weight:bold;">{usage:.1f}%</td>'
+                f'<td style="border:1px solid #ddd;padding:8px;">{threshold}%</td>'
+                f'<td style="border:1px solid #ddd;padding:8px;color:{color};font-weight:bold;">{escape(status)}</td>'
+                "</tr>"
+            )
+        return "\n".join(rows)
+
+    def _send_resource_alert_email(
+        self,
+        aibox: dict,
+        timestamp: str,
+        resources: dict[str, float],
+        over_threshold: dict[str, float],
+    ) -> None:
+        highest_resource, highest_usage = max(over_threshold.items(), key=lambda item: item[1])
+        body = config.RESOURCE_ALERT_BODY_TEMPLATE.format(
+            resource_name=", ".join(over_threshold),
+            hostname=aibox["name"],
+            timestamp=timestamp,
+            usage=highest_usage,
+            threshold=self._resource_threshold(highest_resource),
+            resource_rows=self._build_resource_rows(resources, over_threshold),
+        )
+        self.email_alert.send_status_email(
+            config.RESOURCE_ALERT_SUBJECT.format(hostname=aibox["name"]), body, aibox["recipients"]
+        )
+
     @staticmethod
     def _build_aibox_rows(
         aiboxes: dict[str, str],
@@ -251,47 +457,80 @@ class AiboxMonitor:
             )
         return "\n".join(rows)
 
-    def check_aiboxes(self) -> None:
-        hostname = socket.gethostname()
+    def check_aiboxes(self) -> set[str]:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         aibox_configs = config.get_aibox_configs()
-        aiboxes = {aibox["ip"]: aibox["name"] for aibox in aibox_configs}
+        checked_aibox_configs = []
+        recovered_aibox_ips = set()
+        for aibox in aibox_configs:
+            if aibox["check-devices"] and aibox["local"]:
+                checked_aibox_configs.append(aibox)
+                logger.info(f"Running local AIBOX check: {aibox['name']} ({len(aibox['targets'])} targets)")
+            elif not aibox["check-devices"]:
+                logger.info(f"Skipping disabled AIBOX check: {aibox['name']} ({aibox.get('ip', '')})")
+        if not checked_aibox_configs:
+            logger.info("No local AIBOX checks configured")
+        aiboxes = {
+            ip_address: name
+            for aibox in checked_aibox_configs
+            for ip_address, name in aibox["targets"].items()
+        }
 
         logger.info("Checking AIBOX connectivity...")
-        for aibox in aibox_configs:
-            ip_address = aibox["ip"]
-            name = aibox["name"]
-            is_online = self._ping_host(ip_address)
-            was_online = self.aibox_status.get(ip_address)
-            state = "online" if is_online else "offline"
+        for aibox in checked_aibox_configs:
+            changed_statuses = {}
+            for ip_address, name in aibox["targets"].items():
+                is_online = self._ping_host(ip_address)
+                was_online = self.aibox_status.get(ip_address)
+                state = "online" if is_online else "offline"
 
-            if was_online is None:
-                logger.info(f"Initial AIBOX state: {name} ({ip_address}) is {state}")
-            elif was_online and not is_online:
-                logger.warning(f"AIBOX offline: {name} ({ip_address})")
-                self._send_down_email(ip_address, name, hostname, timestamp, aibox["recipients"], aiboxes)
-            elif not was_online and is_online:
-                logger.info(f"AIBOX back online: {name} ({ip_address})")
-                self._send_up_email(ip_address, name, hostname, timestamp, aibox["recipients"], aiboxes)
-            else:
-                logger.info(f"AIBOX unchanged: {name} ({ip_address}) is {state}")
+                if was_online is None:
+                    logger.info(f"Initial AIBOX state: {name} ({ip_address}) is {state}")
+                elif was_online and not is_online:
+                    logger.warning(f"AIBOX offline: {name} ({ip_address})")
+                    changed_statuses[ip_address] = "Mất kết nối"
+                elif not was_online and is_online:
+                    logger.info(f"AIBOX back online: {name} ({ip_address})")
+                    changed_statuses[ip_address] = "Đã kết nối lại"
+                    recovered_aibox_ips.add(ip_address)
+                else:
+                    logger.info(f"AIBOX unchanged: {name} ({ip_address}) is {state}")
 
-            self.aibox_status[ip_address] = is_online
+                self.aibox_status[ip_address] = is_online
+
+            if changed_statuses:
+                logger.info(f"Sending batched AIBOX status-change email for {aibox['name']}: {len(changed_statuses)} change(s)")
+                self._send_aibox_status_change_email(aibox, timestamp, changed_statuses)
 
         now = time.monotonic()
         if now >= self.next_status_summary_at:
             logger.info("Sending scheduled AIBOX status summary email")
-            for aibox in aibox_configs:
-                self._send_status_summary_email(timestamp, aibox["recipients"], aiboxes)
+            for recipients, group in self._group_recipients(checked_aibox_configs).items():
+                group_aiboxes = {
+                    ip_address: name
+                    for aibox in group
+                    for ip_address, name in aibox["targets"].items()
+                }
+                self._send_status_summary_email(timestamp, list(recipients), group_aiboxes)
             self.next_status_summary_at = now + config.STATUS_SUMMARY_INTERVAL_SECONDS
 
-    def check_aibox_targets(self) -> None:
+        return recovered_aibox_ips
+
+    def check_aibox_targets(self, recovered_aibox_ips: set[str] | None = None) -> None:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        recovered_aibox_ips = recovered_aibox_ips or set()
 
         logger.info("Checking devices behind AIBOXes...")
         for aibox in config.get_aibox_configs():
+            if not aibox["check-devices"]:
+                logger.info(f"Skipping disabled target checks: {aibox['name']} ({aibox.get('ip', '')})")
+                continue
+            if aibox["local"]:
+                logger.info(f"Skipping local target checks: {aibox['name']}")
+                continue
             aibox_ip = aibox["ip"]
             user = aibox["user"]
+            send_recovery_result = aibox_ip in recovered_aibox_ips
             if not self.aibox_status.get(aibox_ip, False):
                 logger.warning(f"Skipping target checks because AIBOX is offline: {aibox['name']} ({aibox_ip})")
                 continue
@@ -302,10 +541,6 @@ class AiboxMonitor:
             newly_down = {}
             back_up = {}
             for target_ip, target_name in aibox["targets"].items():
-                if not self._ping_host(target_ip):
-                    logger.warning(f"Skipping SSH ping because target is not locally reachable: {target_name} ({target_ip})")
-                    continue
-
                 is_online = self._ping_target_from_aibox(user, aibox_ip, target_ip)
                 key = self._target_key(aibox_ip, target_ip)
                 was_online = self.target_status.get(key)
@@ -325,9 +560,57 @@ class AiboxMonitor:
                 self.target_status[key] = is_online
 
             if newly_down:
-                self._send_target_down_email(aibox, timestamp, newly_down)
+                logger.info(f"Queued target down changes for {aibox['name']}: {len(newly_down)}")
             if back_up:
-                self._send_target_up_email(aibox, timestamp, back_up)
+                logger.info(f"Queued target recovery changes for {aibox['name']}: {len(back_up)}")
+            changed_statuses = {**newly_down, **back_up}
+            if send_recovery_result:
+                logger.info(
+                    f"Sending target recovery check result email for {aibox['name']}: "
+                    f"{len(aibox['targets'])} target(s), {len(changed_statuses)} change(s)"
+                )
+                self._send_target_recovery_check_result_email(aibox, timestamp, changed_statuses)
+            elif changed_statuses:
+                logger.info(f"Sending batched target status-change email for {aibox['name']}: {len(changed_statuses)} change(s)")
+                self._send_target_status_change_email(aibox, timestamp, changed_statuses)
+
+    def check_aibox_resources(self) -> None:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        logger.info("Checking AIBOX resource usage...")
+        for aibox in config.get_aibox_configs():
+            if not aibox["check-resource"]:
+                continue
+            if aibox["local"]:
+                logger.info(f"Skipping local resource checks: {aibox['name']}")
+                continue
+
+            aibox_ip = aibox["ip"]
+            user = aibox["user"]
+            if not self._ping_host(aibox_ip):
+                logger.warning(f"Skipping resource checks because AIBOX is offline: {aibox['name']} ({aibox_ip})")
+                self.aibox_status[aibox_ip] = False
+                continue
+            self.aibox_status[aibox_ip] = True
+
+            if not self._can_ssh(user, aibox_ip):
+                logger.warning(f"Skipping resource checks because SSH is unavailable: {user}@{aibox_ip}")
+                continue
+
+            resources = self._collect_resources_from_aibox(user, aibox_ip)
+            if resources is None:
+                continue
+
+            over_threshold = {
+                name: usage
+                for name, usage in resources.items()
+                if usage >= self._resource_threshold(name)
+            }
+            if len(over_threshold) > 1:
+                logger.warning(f"Resource alert for {aibox['name']}: {over_threshold}")
+                self._send_resource_alert_email(aibox, timestamp, resources, over_threshold)
+            else:
+                logger.info(f"Resource usage normal for {aibox['name']}: {resources}")
 
     def run(self) -> None:
         self.running = True
@@ -337,8 +620,9 @@ class AiboxMonitor:
         logger.info("=" * 50)
 
         while self.running:
-            self.check_aiboxes()
-            self.check_aibox_targets()
+            recovered_aibox_ips = self.check_aiboxes()
+            self.check_aibox_targets(recovered_aibox_ips=recovered_aibox_ips)
+            self.check_aibox_resources()
             logger.info(f"Sleeping for {config.PING_INTERVAL_SECONDS} seconds...")
             sleep_until = time.monotonic() + config.PING_INTERVAL_SECONDS
             while self.running and time.monotonic() < sleep_until:
