@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 PING_INTERVAL_SECONDS = 3 * 60
 PING_TIMEOUT_SECONDS = 2
-STATUS_SUMMARY_INTERVAL_SECONDS = 6 * 60 * 60
+STATUS_SUMMARY_HOURS = {0, 6, 12, 18}
 CPU_THRESHOLD = 90
 RAM_THRESHOLD = 90
 NPU_THRESHOLD = 90
@@ -237,7 +237,7 @@ STATUS_SUMMARY_BODY_TEMPLATE = """
 <html><body style="font-family:Arial,sans-serif;color:#1f2937;">
 <h2 style="color:#1d4ed8;">Trạng thái AIBOX hiện tại</h2>
 <p><b>Thời gian:</b> {timestamp}</p>
-<p>Báo cáo tự động sau mỗi 6 giờ.</p>
+<p>Báo cáo tự động lúc 0h, 6h, 12h và 18h.</p>
 <table style="border-collapse:collapse;width:100%;max-width:760px;">
   <tr style="background:#f3f4f6;"><th style="border:1px solid #ddd;padding:8px;text-align:left;">Trạng thái</th><th style="border:1px solid #ddd;padding:8px;text-align:left;">AIBOX</th><th style="border:1px solid #ddd;padding:8px;text-align:left;">IP</th></tr>
   {aibox_rows}
@@ -245,10 +245,10 @@ STATUS_SUMMARY_BODY_TEMPLATE = """
 </body></html>
 """
 
-TARGET_DOWN_SUBJECT = "[CẢNH BÁO] Thiết bị sau AIBOX mất kết nối - {aibox_name}"
+TARGET_DOWN_SUBJECT = "[CẢNH BÁO] Thiết bị sau khi AIBOX mất kết nối - {aibox_name}"
 TARGET_DOWN_BODY_TEMPLATE = """
 <html><body style="font-family:Arial,sans-serif;color:#1f2937;">
-<h2 style="color:#b91c1c;">Thiết bị sau AIBOX mất kết nối</h2>
+<h2 style="color:#b91c1c;">Thiết bị sau khi AIBOX mất kết nối</h2>
 <p><b>AIBOX:</b> {aibox_name}</p>
 <p><b>IP AIBOX:</b> {aibox_ip}</p>
 <p><b>Thời gian:</b> {timestamp}</p>
@@ -260,10 +260,10 @@ TARGET_DOWN_BODY_TEMPLATE = """
 </body></html>
 """
 
-TARGET_UP_SUBJECT = "[KHÔI PHỤC] Thiết bị sau AIBOX đã kết nối lại - {aibox_name}"
+TARGET_UP_SUBJECT = "[KHÔI PHỤC] Thiết bị sau khi AIBOX đã kết nối lại - {aibox_name}"
 TARGET_UP_BODY_TEMPLATE = """
 <html><body style="font-family:Arial,sans-serif;color:#1f2937;">
-<h2 style="color:#15803d;">Thiết bị sau AIBOX đã kết nối lại</h2>
+<h2 style="color:#15803d;">Thiết bị sau khi AIBOX đã kết nối lại</h2>
 <p><b>AIBOX:</b> {aibox_name}</p>
 <p><b>IP AIBOX:</b> {aibox_ip}</p>
 <p><b>Thời gian:</b> {timestamp}</p>
@@ -274,10 +274,10 @@ TARGET_UP_BODY_TEMPLATE = """
 </body></html>
 """
 
-TARGET_STATUS_CHANGE_SUBJECT = "[{prefix}] Tổng hợp thay đổi trạng thái thiết bị sau AIBOX - {aibox_name}"
+TARGET_STATUS_CHANGE_SUBJECT = "[{prefix}] Tổng hợp thay đổi các thiết bị ở {hostname}"
 TARGET_STATUS_CHANGE_BODY_TEMPLATE = """
 <html><body style="font-family:Arial,sans-serif;color:#1f2937;">
-<h2 style="color:{heading_color};">Tổng hợp thay đổi trạng thái thiết bị sau AIBOX</h2>
+<h2 style="color:{heading_color};">Tổng hợp thay đổi các thiết bị ở {hostname}</h2>
 <p><b>AIBOX:</b> {aibox_name}</p>
 <p><b>IP AIBOX:</b> {aibox_ip}</p>
 <p><b>Thời gian:</b> {timestamp}</p>
@@ -306,6 +306,21 @@ TARGET_RECOVERY_CHECK_RESULT_BODY_TEMPLATE = """
 </body></html>
 """
 
+TARGET_STATUS_SUMMARY_SUBJECT = "[BÁO CÁO] Trạng thái thiết bị sau AIBOX hiện tại - {aibox_name}"
+TARGET_STATUS_SUMMARY_BODY_TEMPLATE = """
+<html><body style="font-family:Arial,sans-serif;color:#1f2937;">
+<h2 style="color:#1d4ed8;">Trạng thái thiết bị sau AIBOX hiện tại</h2>
+<p><b>AIBOX:</b> {aibox_name}</p>
+<p><b>IP AIBOX:</b> {aibox_ip}</p>
+<p><b>Thời gian:</b> {timestamp}</p>
+<p>Báo cáo tự động lúc 0h, 6h, 12h và 18h.</p>
+<table style="border-collapse:collapse;width:100%;max-width:760px;">
+  <tr style="background:#f3f4f6;"><th style="border:1px solid #ddd;padding:8px;text-align:left;">Trạng thái</th><th style="border:1px solid #ddd;padding:8px;text-align:left;">Tên camera</th><th style="border:1px solid #ddd;padding:8px;text-align:left;">IP</th></tr>
+  {target_rows}
+</table>
+</body></html>
+"""
+
 RESOURCE_ALERT_SUBJECT = "[CẢNH BÁO] Tài nguyên AIBOX vượt ngưỡng - {hostname}"
 RESOURCE_ALERT_BODY_TEMPLATE = """
 <html><body style="font-family:Arial,sans-serif;color:#1f2937;">
@@ -320,6 +335,20 @@ RESOURCE_ALERT_BODY_TEMPLATE = """
   {resource_rows}
 </table>
 <p style="color:#b91c1c;font-weight:bold;">Vui lòng kiểm tra ngay.</p>
+</body></html>
+"""
+
+RESOURCE_STATUS_SUMMARY_SUBJECT = "[BÁO CÁO] Tài nguyên AIBOX hiện tại - {hostname}"
+RESOURCE_STATUS_SUMMARY_BODY_TEMPLATE = """
+<html><body style="font-family:Arial,sans-serif;color:#1f2937;">
+<h2 style="color:#1d4ed8;">Tài nguyên AIBOX hiện tại</h2>
+<p><b>AIBOX:</b> {hostname}</p>
+<p><b>Thời gian:</b> {timestamp}</p>
+<p>Báo cáo tự động lúc 0h, 6h, 12h và 18h.</p>
+<table style="border-collapse:collapse;width:100%;max-width:760px;">
+  <tr style="background:#f3f4f6;"><th style="border:1px solid #ddd;padding:8px;text-align:left;">Tài nguyên</th><th style="border:1px solid #ddd;padding:8px;text-align:left;">Mức sử dụng</th><th style="border:1px solid #ddd;padding:8px;text-align:left;">Ngưỡng</th><th style="border:1px solid #ddd;padding:8px;text-align:left;">Trạng thái</th></tr>
+  {resource_rows}
+</table>
 </body></html>
 """
 

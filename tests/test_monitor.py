@@ -1,4 +1,5 @@
 import config
+from datetime import datetime
 import subprocess
 from main import AiboxMonitor
 
@@ -155,86 +156,103 @@ def test_multiple_status_changes_send_one_batched_email(monkeypatch):
     assert monitor.aibox_status == {"192.0.2.1": False, "192.0.2.2": True, "192.0.2.3": True}
 
 
-def test_status_summary_sends_after_interval(monkeypatch):
+def _set_now(monkeypatch, value: datetime):
+    class FixedDatetime:
+        @classmethod
+        def now(cls):
+            return value
+
+    monkeypatch.setattr("main.datetime", FixedDatetime)
+
+
+def test_status_summary_sends_at_configured_hour(monkeypatch):
     monitor = AiboxMonitor()
-    monitor.next_status_summary_at = 100.0
     sent = []
 
     monkeypatch.setattr(config, "get_aibox_configs", _direct_config)
-    monkeypatch.setattr(monitor, "_ping_host", lambda ip: True)
-    monkeypatch.setattr("main.time.monotonic", lambda: 100.0)
+    _set_now(monkeypatch, datetime(2026, 5, 15, 6, 1, 0))
     monkeypatch.setattr(monitor, "_send_status_summary_email", lambda *args: sent.append(args))
 
-    monitor.check_aiboxes()
+    monitor.send_scheduled_status_summaries()
 
     assert len(sent) == 1
     assert sent[0][1] == ["ops@example.com"]
     assert sent[0][2] == {"192.0.2.1": "Box 1"}
-    assert monitor.next_status_summary_at == 100.0 + config.STATUS_SUMMARY_INTERVAL_SECONDS
+    assert monitor.last_status_summary_slot == "2026-05-15 06"
 
 
-def test_status_summary_batches_same_recipient_lists(monkeypatch):
+def test_status_summary_sends_once_per_slot(monkeypatch):
     monitor = AiboxMonitor()
-    monitor.next_status_summary_at = 100.0
-    sent = []
-
-    monkeypatch.setattr(
-        config,
-        "get_aibox_configs",
-        lambda: [
-            {"name": "Local 1", "check-devices": True, "check-resource": False, "local": True, "user": "", "ip": "", "recipients": ["ops@example.com"], "targets": {"192.0.2.1": "Box 1"}},
-            {"name": "Local 2", "check-devices": True, "check-resource": False, "local": True, "user": "", "ip": "", "recipients": ["ops@example.com"], "targets": {"192.0.2.2": "Box 2"}},
-        ],
-    )
-    monkeypatch.setattr(monitor, "_ping_host", lambda ip: True)
-    monkeypatch.setattr("main.time.monotonic", lambda: 100.0)
-    monkeypatch.setattr(monitor, "_send_status_summary_email", lambda *args: sent.append(args))
-
-    monitor.check_aiboxes()
-
-    assert len(sent) == 1
-    assert sent[0][1] == ["ops@example.com"]
-    assert sent[0][2] == {"192.0.2.1": "Box 1", "192.0.2.2": "Box 2"}
-
-
-def test_status_summary_separates_different_recipient_lists(monkeypatch):
-    monitor = AiboxMonitor()
-    monitor.next_status_summary_at = 100.0
-    sent = []
-
-    monkeypatch.setattr(
-        config,
-        "get_aibox_configs",
-        lambda: [
-            {"name": "Local 1", "check-devices": True, "check-resource": False, "local": True, "user": "", "ip": "", "recipients": ["ops1@example.com"], "targets": {"192.0.2.1": "Box 1"}},
-            {"name": "Local 2", "check-devices": True, "check-resource": False, "local": True, "user": "", "ip": "", "recipients": ["ops2@example.com"], "targets": {"192.0.2.2": "Box 2"}},
-        ],
-    )
-    monkeypatch.setattr(monitor, "_ping_host", lambda ip: True)
-    monkeypatch.setattr("main.time.monotonic", lambda: 100.0)
-    monkeypatch.setattr(monitor, "_send_status_summary_email", lambda *args: sent.append(args))
-
-    monitor.check_aiboxes()
-
-    assert len(sent) == 2
-    assert sent[0][1] == ["ops1@example.com"]
-    assert sent[1][1] == ["ops2@example.com"]
-
-
-def test_status_summary_waits_before_interval(monkeypatch):
-    monitor = AiboxMonitor()
-    monitor.next_status_summary_at = 101.0
     sent = []
 
     monkeypatch.setattr(config, "get_aibox_configs", _direct_config)
-    monkeypatch.setattr(monitor, "_ping_host", lambda ip: True)
-    monkeypatch.setattr("main.time.monotonic", lambda: 100.0)
+    _set_now(monkeypatch, datetime(2026, 5, 15, 12, 30, 0))
     monkeypatch.setattr(monitor, "_send_status_summary_email", lambda *args: sent.append(args))
 
-    monitor.check_aiboxes()
+    monitor.send_scheduled_status_summaries()
+    monitor.send_scheduled_status_summaries()
+
+    assert len(sent) == 1
+
+
+def test_status_summary_waits_before_configured_hour(monkeypatch):
+    monitor = AiboxMonitor()
+    sent = []
+
+    monkeypatch.setattr(config, "get_aibox_configs", _direct_config)
+    _set_now(monkeypatch, datetime(2026, 5, 15, 7, 0, 0))
+    monkeypatch.setattr(monitor, "_send_status_summary_email", lambda *args: sent.append(args))
+
+    monitor.send_scheduled_status_summaries()
 
     assert sent == []
-    assert monitor.next_status_summary_at == 101.0
+    assert monitor.last_status_summary_slot is None
+
+
+def test_status_summary_sends_for_each_scope(monkeypatch):
+    monitor = AiboxMonitor()
+    monitor.aibox_status = {"192.0.2.10": True}
+    monitor.target_status = {"192.0.2.10:192.0.2.20": True}
+    monitor.resource_status = {"192.0.2.10": {"CPU": 10.0, "RAM": 20.0, "NPU Core 0": 0.0}}
+    local_sent = []
+    target_sent = []
+    resource_sent = []
+
+    monkeypatch.setattr(config, "get_aibox_configs", lambda: _direct_config() + _target_config())
+    _set_now(monkeypatch, datetime(2026, 5, 15, 18, 0, 0))
+    monkeypatch.setattr(monitor, "_can_ssh", lambda *args: True)
+    monkeypatch.setattr(monitor, "_send_status_summary_email", lambda *args: local_sent.append(args))
+    monkeypatch.setattr(monitor, "_send_target_status_summary_email", lambda *args: target_sent.append(args))
+    monkeypatch.setattr(monitor, "_send_resource_status_summary_email", lambda *args: resource_sent.append(args))
+
+    configs = _target_config()
+    configs[0]["check-resource"] = True
+    monkeypatch.setattr(config, "get_aibox_configs", lambda: _direct_config() + configs)
+    monitor.send_scheduled_status_summaries()
+
+    assert len(local_sent) == 1
+    assert len(target_sent) == 1
+    assert len(resource_sent) == 1
+
+
+def test_status_summary_skips_offline_or_ssh_unavailable_scopes(monkeypatch):
+    monitor = AiboxMonitor()
+    monitor.aibox_status = {"192.0.2.10": False}
+    target_sent = []
+    resource_sent = []
+
+    configs = _target_config()
+    configs[0]["check-resource"] = True
+    monkeypatch.setattr(config, "get_aibox_configs", lambda: configs)
+    _set_now(monkeypatch, datetime(2026, 5, 15, 0, 0, 0))
+    monkeypatch.setattr(monitor, "_can_ssh", lambda *args: True)
+    monkeypatch.setattr(monitor, "_send_target_status_summary_email", lambda *args: target_sent.append(args))
+    monkeypatch.setattr(monitor, "_send_resource_status_summary_email", lambda *args: resource_sent.append(args))
+
+    monitor.send_scheduled_status_summaries()
+
+    assert target_sent == []
+    assert resource_sent == []
 
 
 def test_build_aibox_rows_includes_all_boxes_and_highlights_changed():
@@ -300,7 +318,7 @@ def test_send_status_summary_email_uses_real_template(monkeypatch):
     subject, body, recipients = sent[0]
     assert subject == config.STATUS_SUMMARY_SUBJECT
     assert recipients == ["ops@example.com"]
-    assert "Báo cáo tự động sau mỗi 6 giờ" in body
+    assert "Báo cáo tự động lúc 0h, 6h, 12h và 18h" in body
     assert "Box 1" in body
     assert "Box 2" in body
     assert "Đang kết nối" in body
@@ -467,7 +485,7 @@ def test_send_target_down_email_uses_monitoring_camera_format(monkeypatch):
     monitor._send_target_down_email(_target_config()[0], "2026-05-15 10:00:00", {"192.0.2.20": "Mất kết nối"})
 
     subject, body, recipients = sent[0]
-    assert subject == "[CẢNH BÁO] Thiết bị sau AIBOX mất kết nối - Site 1"
+    assert subject == "[CẢNH BÁO] Thiết bị sau khi AIBOX mất kết nối - Site 1"
     assert recipients == ["ops@example.com"]
     assert "font-family:Arial,sans-serif;color:#1f2937" in body
     assert "Tên camera" in body
@@ -516,7 +534,7 @@ def test_send_batched_target_status_change_email_uses_combined_format(monkeypatc
     )
 
     subject, body, recipients = sent[0]
-    assert subject == "[CẢNH BÁO] Tổng hợp thay đổi trạng thái thiết bị sau AIBOX - Site 1"
+    assert subject == "[CẢNH BÁO] Tổng hợp thay đổi các thiết bị ở Site 1"
     assert recipients == ["ops@example.com"]
     assert "Số thay đổi:</b> 2" in body
     assert "Camera 1" in body

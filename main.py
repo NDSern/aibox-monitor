@@ -28,7 +28,8 @@ class AiboxMonitor:
         self.email_alert = EmailAlert()
         self.aibox_status = {}
         self.target_status = {}
-        self.next_status_summary_at = time.monotonic() + config.STATUS_SUMMARY_INTERVAL_SECONDS
+        self.resource_status = {}
+        self.last_status_summary_slot = None
         self.running = False
 
     @staticmethod
@@ -94,6 +95,12 @@ class AiboxMonitor:
             ),
         )
         self.email_alert.send_status_email(config.STATUS_SUMMARY_SUBJECT, body, recipients)
+
+    @staticmethod
+    def _status_summary_slot(now: datetime) -> str | None:
+        if now.hour not in config.STATUS_SUMMARY_HOURS:
+            return None
+        return now.strftime("%Y-%m-%d %H")
 
     @staticmethod
     def _change_email_style(changed_statuses: dict[str, str]) -> tuple[str, str]:
@@ -347,6 +354,7 @@ print(json.dumps({
     ) -> None:
         prefix, heading_color = self._change_email_style(changed_statuses)
         body = config.TARGET_STATUS_CHANGE_BODY_TEMPLATE.format(
+            hostname=aibox["name"],
             aibox_name=aibox["name"],
             aibox_ip=aibox["ip"],
             timestamp=timestamp,
@@ -355,7 +363,7 @@ print(json.dumps({
             target_rows=self._build_target_rows(aibox["targets"], self.target_status, changed_statuses, aibox["ip"]),
         )
         self.email_alert.send_status_email(
-            config.TARGET_STATUS_CHANGE_SUBJECT.format(prefix=prefix, aibox_name=aibox["name"]),
+            config.TARGET_STATUS_CHANGE_SUBJECT.format(prefix=prefix, hostname=aibox["name"]),
             body,
             aibox["recipients"],
         )
@@ -379,6 +387,19 @@ print(json.dumps({
         )
         self.email_alert.send_status_email(
             config.TARGET_RECOVERY_CHECK_RESULT_SUBJECT.format(aibox_name=aibox["name"]),
+            body,
+            aibox["recipients"],
+        )
+
+    def _send_target_status_summary_email(self, aibox: dict, timestamp: str) -> None:
+        body = config.TARGET_STATUS_SUMMARY_BODY_TEMPLATE.format(
+            aibox_name=aibox["name"],
+            aibox_ip=aibox["ip"],
+            timestamp=timestamp,
+            target_rows=self._build_target_rows(aibox["targets"], self.target_status, {}, aibox["ip"]),
+        )
+        self.email_alert.send_status_email(
+            config.TARGET_STATUS_SUMMARY_SUBJECT.format(aibox_name=aibox["name"]),
             body,
             aibox["recipients"],
         )
@@ -421,6 +442,16 @@ print(json.dumps({
         )
         self.email_alert.send_status_email(
             config.RESOURCE_ALERT_SUBJECT.format(hostname=aibox["name"]), body, aibox["recipients"]
+        )
+
+    def _send_resource_status_summary_email(self, aibox: dict, timestamp: str, resources: dict[str, float]) -> None:
+        body = config.RESOURCE_STATUS_SUMMARY_BODY_TEMPLATE.format(
+            hostname=aibox["name"],
+            timestamp=timestamp,
+            resource_rows=self._build_resource_rows(resources, {}),
+        )
+        self.email_alert.send_status_email(
+            config.RESOURCE_STATUS_SUMMARY_SUBJECT.format(hostname=aibox["name"]), body, aibox["recipients"]
         )
 
     @staticmethod
@@ -501,18 +532,6 @@ print(json.dumps({
             if changed_statuses:
                 logger.info(f"Sending batched AIBOX status-change email for {aibox['name']}: {len(changed_statuses)} change(s)")
                 self._send_aibox_status_change_email(aibox, timestamp, changed_statuses)
-
-        now = time.monotonic()
-        if now >= self.next_status_summary_at:
-            logger.info("Sending scheduled AIBOX status summary email")
-            for recipients, group in self._group_recipients(checked_aibox_configs).items():
-                group_aiboxes = {
-                    ip_address: name
-                    for aibox in group
-                    for ip_address, name in aibox["targets"].items()
-                }
-                self._send_status_summary_email(timestamp, list(recipients), group_aiboxes)
-            self.next_status_summary_at = now + config.STATUS_SUMMARY_INTERVAL_SECONDS
 
         return recovered_aibox_ips
 
@@ -600,6 +619,7 @@ print(json.dumps({
             resources = self._collect_resources_from_aibox(user, aibox_ip)
             if resources is None:
                 continue
+            self.resource_status[aibox_ip] = resources
 
             over_threshold = {
                 name: usage
@@ -612,6 +632,44 @@ print(json.dumps({
             else:
                 logger.info(f"Resource usage normal for {aibox['name']}: {resources}")
 
+    def send_scheduled_status_summaries(self) -> None:
+        now = datetime.now()
+        summary_slot = self._status_summary_slot(now)
+        if summary_slot is None or summary_slot == self.last_status_summary_slot:
+            return
+
+        timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
+        logger.info(f"Sending scheduled status summaries for slot {summary_slot}")
+        for aibox in config.get_aibox_configs():
+            if aibox["check-devices"] and aibox["local"]:
+                self._send_status_summary_email(timestamp, aibox["recipients"], aibox["targets"])
+                continue
+
+            if aibox["check-devices"]:
+                aibox_ip = aibox["ip"]
+                user = aibox["user"]
+                if not self.aibox_status.get(aibox_ip, False):
+                    logger.warning(f"Skipping scheduled target summary because AIBOX is offline: {aibox['name']} ({aibox_ip})")
+                elif not self._can_ssh(user, aibox_ip):
+                    logger.warning(f"Skipping scheduled target summary because SSH is unavailable: {user}@{aibox_ip}")
+                else:
+                    self._send_target_status_summary_email(aibox, timestamp)
+
+            if aibox["check-resource"] and not aibox["local"]:
+                aibox_ip = aibox["ip"]
+                user = aibox["user"]
+                resources = self.resource_status.get(aibox_ip)
+                if not self.aibox_status.get(aibox_ip, False):
+                    logger.warning(f"Skipping scheduled resource summary because AIBOX is offline: {aibox['name']} ({aibox_ip})")
+                elif not self._can_ssh(user, aibox_ip):
+                    logger.warning(f"Skipping scheduled resource summary because SSH is unavailable: {user}@{aibox_ip}")
+                elif resources is None:
+                    logger.warning(f"Skipping scheduled resource summary because resource data is unavailable: {aibox['name']} ({aibox_ip})")
+                else:
+                    self._send_resource_status_summary_email(aibox, timestamp, resources)
+
+        self.last_status_summary_slot = summary_slot
+
     def run(self) -> None:
         self.running = True
         logger.info("=" * 50)
@@ -623,6 +681,7 @@ print(json.dumps({
             recovered_aibox_ips = self.check_aiboxes()
             self.check_aibox_targets(recovered_aibox_ips=recovered_aibox_ips)
             self.check_aibox_resources()
+            self.send_scheduled_status_summaries()
             logger.info(f"Sleeping for {config.PING_INTERVAL_SECONDS} seconds...")
             sleep_until = time.monotonic() + config.PING_INTERVAL_SECONDS
             while self.running and time.monotonic() < sleep_until:
