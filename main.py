@@ -117,8 +117,42 @@ class AiboxMonitor:
         return groups
 
     @staticmethod
+    def _aibox_report_recipients(aibox_configs: list[dict]) -> list[str]:
+        for aibox in aibox_configs:
+            if aibox["check-devices"] and aibox["local"]:
+                return list(aibox["recipients"])
+        return config.get_recipient_emails()
+
+    @staticmethod
+    def _aibox_report_targets(aibox_configs: list[dict]) -> dict[str, str]:
+        return {
+            ip_address: name
+            for aibox in aibox_configs
+            if aibox["check-devices"] and aibox["local"]
+            for ip_address, name in aibox["targets"].items()
+        }
+
+    @staticmethod
     def _target_key(aibox_ip: str, target_ip: str) -> str:
         return f"{aibox_ip}:{target_ip}"
+
+    def _select_target_checker(self, aibox: dict) -> dict | None:
+        checkers = aibox.get("checkers") or [{"name": aibox["name"], "user": aibox["user"], "ip": aibox["ip"]}]
+        for checker in checkers:
+            checker_ip = checker["ip"]
+            checker_user = checker["user"]
+            if not self.aibox_status.get(checker_ip, False):
+                logger.warning(f"Skipping target checker because AIBOX is offline: {checker.get('name', checker_ip)} ({checker_ip})")
+                continue
+            if not self._can_ssh(checker_user, checker_ip):
+                logger.warning(f"Skipping target checker because SSH is unavailable: {checker_user}@{checker_ip}")
+                continue
+            return checker
+        return None
+
+    @staticmethod
+    def _target_status_key(aibox: dict) -> str:
+        return aibox.get("id") or aibox["ip"]
 
     @staticmethod
     def _can_ssh(user: str, aibox_ip: str) -> bool:
@@ -304,7 +338,7 @@ print(json.dumps({
             aibox_name=aibox["name"],
             aibox_ip=aibox["ip"],
             timestamp=timestamp,
-            target_rows=self._build_target_rows(aibox["targets"], self.target_status, changed_statuses, aibox["ip"]),
+            target_rows=self._build_target_rows(aibox["targets"], self.target_status, changed_statuses, self._target_status_key(aibox)),
         )
         self.email_alert.send_status_email(
             config.TARGET_DOWN_SUBJECT.format(aibox_name=aibox["name"]), body, aibox["recipients"]
@@ -320,7 +354,7 @@ print(json.dumps({
             aibox_name=aibox["name"],
             aibox_ip=aibox["ip"],
             timestamp=timestamp,
-            target_rows=self._build_target_rows(aibox["targets"], self.target_status, changed_statuses, aibox["ip"]),
+            target_rows=self._build_target_rows(aibox["targets"], self.target_status, changed_statuses, self._target_status_key(aibox)),
         )
         self.email_alert.send_status_email(
             config.TARGET_UP_SUBJECT.format(aibox_name=aibox["name"]), body, aibox["recipients"]
@@ -360,7 +394,7 @@ print(json.dumps({
             timestamp=timestamp,
             change_count=len(changed_statuses),
             heading_color=heading_color,
-            target_rows=self._build_target_rows(aibox["targets"], self.target_status, changed_statuses, aibox["ip"]),
+            target_rows=self._build_target_rows(aibox["targets"], self.target_status, changed_statuses, self._target_status_key(aibox)),
         )
         self.email_alert.send_status_email(
             config.TARGET_STATUS_CHANGE_SUBJECT.format(prefix=prefix, hostname=aibox["name"]),
@@ -383,7 +417,7 @@ print(json.dumps({
             target_count=len(aibox["targets"]),
             change_count=len(changed_statuses),
             note_html=note_html,
-            target_rows=self._build_target_rows(aibox["targets"], self.target_status, changed_statuses, aibox["ip"]),
+            target_rows=self._build_target_rows(aibox["targets"], self.target_status, changed_statuses, self._target_status_key(aibox)),
         )
         self.email_alert.send_status_email(
             config.TARGET_RECOVERY_CHECK_RESULT_SUBJECT.format(aibox_name=aibox["name"]),
@@ -396,7 +430,7 @@ print(json.dumps({
             aibox_name=aibox["name"],
             aibox_ip=aibox["ip"],
             timestamp=timestamp,
-            target_rows=self._build_target_rows(aibox["targets"], self.target_status, {}, aibox["ip"]),
+            target_rows=self._build_target_rows(aibox["targets"], self.target_status, {}, self._target_status_key(aibox)),
         )
         self.email_alert.send_status_email(
             config.TARGET_STATUS_SUMMARY_SUBJECT.format(aibox_name=aibox["name"]),
@@ -501,15 +535,11 @@ print(json.dumps({
                 logger.info(f"Skipping disabled AIBOX check: {aibox['name']} ({aibox.get('ip', '')})")
         if not checked_aibox_configs:
             logger.info("No local AIBOX checks configured")
-        aiboxes = {
-            ip_address: name
-            for aibox in checked_aibox_configs
-            for ip_address, name in aibox["targets"].items()
-        }
+        aiboxes = self._aibox_report_targets(checked_aibox_configs)
+        all_changed_statuses = {}
 
         logger.info("Checking AIBOX connectivity...")
         for aibox in checked_aibox_configs:
-            changed_statuses = {}
             for ip_address, name in aibox["targets"].items():
                 is_online = self._ping_host(ip_address)
                 was_online = self.aibox_status.get(ip_address)
@@ -519,19 +549,27 @@ print(json.dumps({
                     logger.info(f"Initial AIBOX state: {name} ({ip_address}) is {state}")
                 elif was_online and not is_online:
                     logger.warning(f"AIBOX offline: {name} ({ip_address})")
-                    changed_statuses[ip_address] = "Mất kết nối"
+                    all_changed_statuses[ip_address] = "Mất kết nối"
                 elif not was_online and is_online:
                     logger.info(f"AIBOX back online: {name} ({ip_address})")
-                    changed_statuses[ip_address] = "Đã kết nối lại"
+                    all_changed_statuses[ip_address] = "Đã kết nối lại"
                     recovered_aibox_ips.add(ip_address)
                 else:
                     logger.info(f"AIBOX unchanged: {name} ({ip_address}) is {state}")
 
                 self.aibox_status[ip_address] = is_online
 
-            if changed_statuses:
-                logger.info(f"Sending batched AIBOX status-change email for {aibox['name']}: {len(changed_statuses)} change(s)")
-                self._send_aibox_status_change_email(aibox, timestamp, changed_statuses)
+        if all_changed_statuses:
+            logger.info(f"Sending grouped AIBOX status-change email: {len(all_changed_statuses)} change(s)")
+            self._send_aibox_status_change_email(
+                {
+                    "name": "Tất cả AIBOX",
+                    "recipients": self._aibox_report_recipients(checked_aibox_configs),
+                    "targets": aiboxes,
+                },
+                timestamp,
+                all_changed_statuses,
+            )
 
         return recovered_aibox_ips
 
@@ -547,21 +585,21 @@ print(json.dumps({
             if aibox["local"]:
                 logger.info(f"Skipping local target checks: {aibox['name']}")
                 continue
-            aibox_ip = aibox["ip"]
-            user = aibox["user"]
+            checker = self._select_target_checker(aibox)
+            if checker is None:
+                logger.warning(f"Skipping target checks because no checker is available: {aibox['name']}")
+                continue
+            aibox_ip = checker["ip"]
+            user = checker["user"]
+            status_key = self._target_status_key(aibox)
             send_recovery_result = aibox_ip in recovered_aibox_ips
-            if not self.aibox_status.get(aibox_ip, False):
-                logger.warning(f"Skipping target checks because AIBOX is offline: {aibox['name']} ({aibox_ip})")
-                continue
-            if not self._can_ssh(user, aibox_ip):
-                logger.warning(f"Skipping target checks because SSH is unavailable: {user}@{aibox_ip}")
-                continue
+            email_aibox = {**aibox, "ip": aibox_ip, "user": user}
 
             newly_down = {}
             back_up = {}
             for target_ip, target_name in aibox["targets"].items():
                 is_online = self._ping_target_from_aibox(user, aibox_ip, target_ip)
-                key = self._target_key(aibox_ip, target_ip)
+                key = self._target_key(status_key, target_ip)
                 was_online = self.target_status.get(key)
                 state = "online" if is_online else "offline"
 
@@ -588,10 +626,10 @@ print(json.dumps({
                     f"Sending target recovery check result email for {aibox['name']}: "
                     f"{len(aibox['targets'])} target(s), {len(changed_statuses)} change(s)"
                 )
-                self._send_target_recovery_check_result_email(aibox, timestamp, changed_statuses)
+                self._send_target_recovery_check_result_email(email_aibox, timestamp, changed_statuses)
             elif changed_statuses:
                 logger.info(f"Sending batched target status-change email for {aibox['name']}: {len(changed_statuses)} change(s)")
-                self._send_target_status_change_email(aibox, timestamp, changed_statuses)
+                self._send_target_status_change_email(email_aibox, timestamp, changed_statuses)
 
     def check_aibox_resources(self) -> None:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -640,20 +678,25 @@ print(json.dumps({
 
         timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
         logger.info(f"Sending scheduled status summaries for slot {summary_slot}")
-        for aibox in config.get_aibox_configs():
-            if aibox["check-devices"] and aibox["local"]:
-                self._send_status_summary_email(timestamp, aibox["recipients"], aibox["targets"])
+        aibox_configs = config.get_aibox_configs()
+        aibox_report_targets = self._aibox_report_targets(aibox_configs)
+        if aibox_report_targets:
+            self._send_status_summary_email(
+                timestamp,
+                self._aibox_report_recipients(aibox_configs),
+                aibox_report_targets,
+            )
+
+        for aibox in aibox_configs:
+            if aibox["local"]:
                 continue
 
             if aibox["check-devices"]:
-                aibox_ip = aibox["ip"]
-                user = aibox["user"]
-                if not self.aibox_status.get(aibox_ip, False):
-                    logger.warning(f"Skipping scheduled target summary because AIBOX is offline: {aibox['name']} ({aibox_ip})")
-                elif not self._can_ssh(user, aibox_ip):
-                    logger.warning(f"Skipping scheduled target summary because SSH is unavailable: {user}@{aibox_ip}")
+                checker = self._select_target_checker(aibox)
+                if checker is None:
+                    logger.warning(f"Skipping scheduled target summary because no checker is available: {aibox['name']}")
                 else:
-                    self._send_target_status_summary_email(aibox, timestamp)
+                    self._send_target_status_summary_email({**aibox, "ip": checker["ip"], "user": checker["user"]}, timestamp)
 
             if aibox["check-resource"] and not aibox["local"]:
                 aibox_ip = aibox["ip"]

@@ -71,7 +71,6 @@ def test_disabled_aibox_is_not_pinged_or_reported(monkeypatch):
     )
     monkeypatch.setattr(monitor, "_ping_host", lambda ip: pings.append(ip) or True)
     monkeypatch.setattr(monitor, "_send_status_summary_email", lambda *args: sent.append(args))
-    monkeypatch.setattr("main.time.monotonic", lambda: monitor.next_status_summary_at)
 
     monitor.check_aiboxes()
 
@@ -92,7 +91,7 @@ def test_offline_transition_sends_batched_status_email(monkeypatch):
     monitor.check_aiboxes()
 
     assert len(sent) == 1
-    assert sent[0][0]["name"] == "Box 1"
+    assert sent[0][0]["name"] == "Tất cả AIBOX"
     assert sent[0][2] == {"192.0.2.1": "Mất kết nối"}
     assert monitor.aibox_status == {"192.0.2.1": False}
 
@@ -109,7 +108,7 @@ def test_recovery_transition_sends_batched_status_email(monkeypatch):
     recovered = monitor.check_aiboxes()
 
     assert len(sent) == 1
-    assert sent[0][0]["name"] == "Box 1"
+    assert sent[0][0]["name"] == "Tất cả AIBOX"
     assert sent[0][2] == {"192.0.2.1": "Đã kết nối lại"}
     assert recovered == {"192.0.2.1"}
     assert monitor.aibox_status == {"192.0.2.1": True}
@@ -156,6 +155,30 @@ def test_multiple_status_changes_send_one_batched_email(monkeypatch):
     assert monitor.aibox_status == {"192.0.2.1": False, "192.0.2.2": True, "192.0.2.3": True}
 
 
+def test_aibox_status_changes_use_single_existing_recipient_list(monkeypatch):
+    monitor = AiboxMonitor()
+    monitor.aibox_status = {"192.0.2.1": True, "192.0.2.2": True}
+    sent = []
+
+    monkeypatch.setattr(
+        config,
+        "get_aibox_configs",
+        lambda: [
+            {"name": "Local 1", "check-devices": True, "check-resource": False, "local": True, "user": "", "ip": "", "recipients": ["a@example.com"], "targets": {"192.0.2.1": "Box 1"}},
+            {"name": "Local 2", "check-devices": True, "check-resource": False, "local": True, "user": "", "ip": "", "recipients": ["b@example.com"], "targets": {"192.0.2.2": "Box 2"}},
+        ],
+    )
+    monkeypatch.setattr(monitor, "_ping_host", lambda ip: False)
+    monkeypatch.setattr(monitor, "_send_aibox_status_change_email", lambda *args: sent.append(args))
+
+    monitor.check_aiboxes()
+
+    assert len(sent) == 1
+    assert sent[0][0]["recipients"] == ["a@example.com"]
+    assert sent[0][0]["targets"] == {"192.0.2.1": "Box 1", "192.0.2.2": "Box 2"}
+    assert sent[0][2] == {"192.0.2.1": "Mất kết nối", "192.0.2.2": "Mất kết nối"}
+
+
 def _set_now(monkeypatch, value: datetime):
     class FixedDatetime:
         @classmethod
@@ -193,6 +216,28 @@ def test_status_summary_sends_once_per_slot(monkeypatch):
     monitor.send_scheduled_status_summaries()
 
     assert len(sent) == 1
+
+
+def test_status_summary_uses_single_existing_aibox_recipient_list(monkeypatch):
+    monitor = AiboxMonitor()
+    sent = []
+
+    monkeypatch.setattr(
+        config,
+        "get_aibox_configs",
+        lambda: [
+            {"name": "Local 1", "check-devices": True, "check-resource": False, "local": True, "user": "", "ip": "", "recipients": ["a@example.com"], "targets": {"192.0.2.1": "Box 1"}},
+            {"name": "Local 2", "check-devices": True, "check-resource": False, "local": True, "user": "", "ip": "", "recipients": ["b@example.com"], "targets": {"192.0.2.2": "Box 2"}},
+        ],
+    )
+    _set_now(monkeypatch, datetime(2026, 5, 15, 12, 0, 0))
+    monkeypatch.setattr(monitor, "_send_status_summary_email", lambda *args: sent.append(args))
+
+    monitor.send_scheduled_status_summaries()
+
+    assert len(sent) == 1
+    assert sent[0][1] == ["a@example.com"]
+    assert sent[0][2] == {"192.0.2.1": "Box 1", "192.0.2.2": "Box 2"}
 
 
 def test_status_summary_waits_before_configured_hour(monkeypatch):

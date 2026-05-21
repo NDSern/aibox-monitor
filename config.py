@@ -127,6 +127,74 @@ def _aibox_config_list_error(value) -> str | None:
     return None
 
 
+def _normalize_v2_config(value: dict) -> list[dict]:
+    default_recipients = value.get("aibox_report_recipients") or value.get("default_recipients") or DEFAULT_RECIPIENT_EMAILS
+    if not _is_valid_recipients(default_recipients):
+        raise ValueError("v2 default recipients must be a non-empty list of email strings")
+    aiboxes = value.get("aiboxes")
+    target_scopes = value.get("target_scopes", [])
+    if not isinstance(aiboxes, list) or not isinstance(target_scopes, list):
+        raise ValueError("v2 config requires aiboxes and target_scopes lists")
+
+    normalized = [
+        {
+            "name": "Kiểm tra trạng thái các AIBOX",
+            "check-devices": True,
+            "check-resource": False,
+            "local": True,
+            "user": "",
+            "ip": "",
+            "recipients": list(default_recipients),
+            "targets": {item["ip"]: item["name"] for item in aiboxes},
+        }
+    ]
+
+    for item in aiboxes:
+        recipients = item.get("recipients") or default_recipients
+        normalized.append(
+            {
+                "id": item.get("id", item["ip"]),
+                "name": item["name"],
+                "check-devices": False,
+                "check-resource": item.get("check-resource", False),
+                "local": False,
+                "user": item.get("user", ""),
+                "ip": item["ip"],
+                "recipients": list(recipients),
+                "targets": {},
+            }
+        )
+
+    for scope in target_scopes:
+        networks = [scope["id"]]
+        checkers = [
+            {
+                "name": item["name"],
+                "user": item.get("user", ""),
+                "ip": item["ip"],
+            }
+            for item in aiboxes
+            if item.get("check-devices", False) and any(network in item.get("networks", []) for network in networks)
+        ]
+        recipients = scope.get("recipients") or default_recipients
+        normalized.append(
+            {
+                "id": scope["id"],
+                "name": scope["name"],
+                "check-devices": True,
+                "check-resource": False,
+                "local": False,
+                "user": checkers[0]["user"] if checkers else "",
+                "ip": checkers[0]["ip"] if checkers else "",
+                "recipients": list(recipients),
+                "targets": dict(scope.get("targets", {})),
+                "checkers": checkers,
+            }
+        )
+
+    return normalized
+
+
 def get_aiboxes() -> dict[str, str]:
     global _aiboxes_cache
 
@@ -160,11 +228,14 @@ def get_aibox_configs() -> list[dict]:
 
     try:
         aibox_configs = _load_json_file(AIBOX_CONFIG_FILE)
+        if isinstance(aibox_configs, dict) and aibox_configs.get("version") == 2:
+            aibox_configs = _normalize_v2_config(aibox_configs)
         config_error = _aibox_config_list_error(aibox_configs)
         if config_error:
             raise ValueError(f"AIBOX config JSON invalid: {config_error}")
-        _aibox_config_cache = [
-            {
+        _aibox_config_cache = []
+        for item in aibox_configs:
+            normalized_item = {
                 "name": item["name"],
                 "check-devices": item.get("check-devices", False),
                 "check-resource": item.get("check-resource", False),
@@ -174,13 +245,17 @@ def get_aibox_configs() -> list[dict]:
                 "recipients": list(item["recipients"]),
                 "targets": dict(item.get("targets", {})),
             }
-            for item in aibox_configs
-        ]
+            if "id" in item:
+                normalized_item["id"] = item["id"]
+            if "checkers" in item:
+                normalized_item["checkers"] = list(item["checkers"])
+            _aibox_config_cache.append(normalized_item)
     except (OSError, json.JSONDecodeError, ValueError) as e:
         logger.warning(f"Using cached AIBOX target config after failed JSON load: {e}")
 
-    return [
-        {
+    configs = []
+    for item in _aibox_config_cache:
+        config_item = {
             "name": item["name"],
             "check-devices": item.get("check-devices", False),
             "check-resource": item.get("check-resource", False),
@@ -190,8 +265,12 @@ def get_aibox_configs() -> list[dict]:
             "recipients": list(item["recipients"]),
             "targets": dict(item.get("targets", {})),
         }
-        for item in _aibox_config_cache
-    ]
+        if "id" in item:
+            config_item["id"] = item["id"]
+        if "checkers" in item:
+            config_item["checkers"] = list(item["checkers"])
+        configs.append(config_item)
+    return configs
 
 DOWN_SUBJECT = "[CẢNH BÁO] AIBOX mất kết nối - Cảng Gia Vũ - Hải Phòng"
 DOWN_BODY_TEMPLATE = """
