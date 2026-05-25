@@ -227,6 +227,65 @@ def test_aibox_status_changes_send_one_email_per_status_group(monkeypatch):
     assert sent[1][2] == {"192.0.2.3": "Mất kết nối"}
 
 
+def test_aibox_status_groups_skip_partial_v2_metadata(caplog):
+    configs = [
+        {
+            "name": "Local",
+            "check-devices": True,
+            "check-resource": False,
+            "local": True,
+            "user": "",
+            "ip": "",
+            "recipients": ["fallback@example.com"],
+            "targets": {"192.0.2.1": "Box 1", "192.0.2.2": "Box 2"},
+            "recipient_groups": {"group1": ["g1@example.com"]},
+        }
+    ]
+
+    assert AiboxMonitor._aibox_status_groups(configs) == {}
+    assert "status recipient grouping is incomplete" in caplog.text
+
+
+def test_aibox_status_groups_skip_missing_target_group(caplog):
+    configs = [
+        {
+            "name": "Local",
+            "check-devices": True,
+            "check-resource": False,
+            "local": True,
+            "user": "",
+            "ip": "",
+            "recipients": ["fallback@example.com"],
+            "targets": {"192.0.2.1": "Box 1", "192.0.2.2": "Box 2"},
+            "recipient_groups": {"group1": ["g1@example.com"]},
+            "status_recipient_groups": {"192.0.2.1": "group1"},
+        }
+    ]
+
+    assert AiboxMonitor._aibox_status_groups(configs) == {}
+    assert "has no status recipient group" in caplog.text
+
+
+def test_aibox_status_groups_skip_unknown_group(caplog):
+    configs = [
+        {
+            "name": "Local",
+            "check-devices": True,
+            "check-resource": False,
+            "local": True,
+            "user": "",
+            "ip": "",
+            "recipients": ["fallback@example.com"],
+            "targets": {"192.0.2.1": "Box 1"},
+            "recipient_groups": {"group1": ["g1@example.com"]},
+            "status_recipient_groups": {"192.0.2.1": "missing"},
+        }
+    ]
+
+    assert AiboxMonitor._aibox_status_groups(configs) == {}
+    assert "group is undefined: missing" in caplog.text
+
+
 def _set_now(monkeypatch, value: datetime):
     class FixedDatetime:
         @classmethod

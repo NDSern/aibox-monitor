@@ -141,7 +141,11 @@ class AiboxMonitor:
                 continue
             recipient_groups = aibox.get("recipient_groups")
             status_groups = aibox.get("status_recipient_groups")
-            if not recipient_groups or not status_groups:
+            has_v2_grouping = "recipient_groups" in aibox or "status_recipient_groups" in aibox
+            if has_v2_grouping and (recipient_groups is None or status_groups is None):
+                logger.error(f"Skipping AIBOX status emails because status recipient grouping is incomplete: {aibox['name']}")
+                return {}
+            if recipient_groups is None and status_groups is None:
                 if fallback_recipients is None:
                     fallback_recipients = list(aibox["recipients"])
                 fallback_targets.update(aibox["targets"])
@@ -149,7 +153,13 @@ class AiboxMonitor:
 
             grouped = {}
             for ip_address, name in aibox["targets"].items():
-                group_name = status_groups[ip_address]
+                group_name = status_groups.get(ip_address)
+                if group_name is None:
+                    logger.error(f"Skipping AIBOX status emails because {ip_address} has no status recipient group")
+                    return {}
+                if group_name not in recipient_groups:
+                    logger.error(f"Skipping AIBOX status emails because group is undefined: {group_name}")
+                    return {}
                 group = grouped.setdefault(
                     group_name,
                     {
@@ -608,7 +618,8 @@ print(json.dumps({
                     continue
                 logger.info(
                     f"Sending grouped AIBOX status-change email for {group_name}: "
-                    f"{len(group_changed_statuses)} change(s)"
+                    f"{len(group_changed_statuses)} change(s), "
+                    f"{len(group['targets'])} target(s), {len(group['recipients'])} recipient(s)"
                 )
                 self._send_aibox_status_change_email(
                     {
