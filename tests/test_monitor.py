@@ -715,3 +715,80 @@ def test_send_resource_alert_email_uses_resource_tracker_format(monkeypatch):
     assert "Vượt ngưỡng" in body
     assert "Bình thường" in body
     assert body.count("#fee2e2") == 2
+
+
+def test_send_all_email_result_templates(monkeypatch):
+    monitor = AiboxMonitor()
+    sent = []
+    monkeypatch.setattr(monitor.email_alert, "send_status_email", lambda *args: sent.append(args) or True)
+    timestamp = "2026-05-21 15:00:00"
+    recipients = ["sondn@vns.ai.vn"]
+    aibox_targets = {
+        "100.64.0.49": "Cảng Gia Vũ - Hải Phòng - Cân 1",
+        "100.64.0.92": "Cảng Gia Vũ - Hải Phòng - Cân 2",
+        "100.64.0.65": "Cảng Mỹ Xuân A - Vũng Tàu",
+    }
+    local_scope = {
+        "name": "Tất cả AIBOX",
+        "recipients": recipients,
+        "targets": aibox_targets,
+    }
+    target_scope = {
+        "id": "giavu-lan",
+        "name": "Cảng Gia Vũ - Hải Phòng",
+        "ip": "100.64.0.49",
+        "recipients": recipients,
+        "targets": {
+            "192.168.1.103": "Cam nhìn băng truyền",
+            "192.168.1.34": "Cam nhìn cẩu hành từ tàu",
+            "192.168.1.101": "Cam nhìn khoang hàng trên xe",
+        },
+    }
+    resource_scope = {
+        "name": "Cảng Gia Vũ - Hải Phòng - Cân 1",
+        "recipients": recipients,
+    }
+    resources = {"CPU": 91.0, "RAM": 92.0, "NPU Core 0": 10.0, "NPU Core 1": 95.0, "NPU Core 2": 0.0}
+    over_threshold = {"CPU": 91.0, "RAM": 92.0, "NPU Core 1": 95.0}
+    monitor.aibox_status = {"100.64.0.49": False, "100.64.0.92": True, "100.64.0.65": True}
+    monitor.target_status = {
+        "giavu-lan:192.168.1.103": False,
+        "giavu-lan:192.168.1.34": True,
+        "giavu-lan:192.168.1.101": True,
+    }
+
+    senders = [
+        lambda: monitor._send_down_email("100.64.0.49", "Cảng Gia Vũ - Hải Phòng - Cân 1", "Tất cả AIBOX", timestamp, recipients, aibox_targets),
+        lambda: monitor._send_up_email("100.64.0.49", "Cảng Gia Vũ - Hải Phòng - Cân 1", "Tất cả AIBOX", timestamp, recipients, aibox_targets),
+        lambda: monitor._send_aibox_status_change_email(local_scope, timestamp, {"100.64.0.49": "Mất kết nối", "100.64.0.92": "Đã kết nối lại"}),
+        lambda: monitor._send_status_summary_email(timestamp, recipients, aibox_targets),
+        lambda: monitor._send_target_down_email(target_scope, timestamp, {"192.168.1.103": "Mất kết nối"}),
+        lambda: monitor._send_target_up_email(target_scope, timestamp, {"192.168.1.34": "Đã kết nối lại"}),
+        lambda: monitor._send_target_status_change_email(target_scope, timestamp, {"192.168.1.103": "Mất kết nối", "192.168.1.34": "Đã kết nối lại"}),
+        lambda: monitor._send_target_recovery_check_result_email(target_scope, timestamp, {"192.168.1.103": "Mất kết nối", "192.168.1.34": "Đã kết nối lại"}),
+        lambda: monitor._send_target_status_summary_email(target_scope, timestamp),
+        lambda: monitor._send_resource_alert_email(resource_scope, timestamp, resources, over_threshold),
+        lambda: monitor._send_resource_status_summary_email(resource_scope, timestamp, resources),
+    ]
+
+    for send in senders:
+        send()
+
+    assert len(sent) == 11
+    subjects = [subject for subject, _, _ in sent]
+    bodies = "\n".join(body for _, body, _ in sent)
+    assert config.DOWN_SUBJECT in subjects
+    assert config.UP_SUBJECT in subjects
+    assert config.STATUS_SUMMARY_SUBJECT in subjects
+    assert "[CẢNH BÁO] Tổng hợp thay đổi trạng thái AIBOX - Tất cả AIBOX" in subjects
+    assert "[CẢNH BÁO] Tổng hợp thay đổi các thiết bị ở Cảng Gia Vũ - Hải Phòng" in subjects
+    assert "[THÔNG TIN] Kết quả kiểm tra thiết bị sau khi AIBOX khôi phục - Cảng Gia Vũ - Hải Phòng" in subjects
+    assert "[BÁO CÁO] Trạng thái thiết bị sau AIBOX hiện tại - Cảng Gia Vũ - Hải Phòng" in subjects
+    assert "[CẢNH BÁO] Tài nguyên AIBOX vượt ngưỡng - Cảng Gia Vũ - Hải Phòng - Cân 1" in subjects
+    assert "[BÁO CÁO] Tài nguyên AIBOX hiện tại - Cảng Gia Vũ - Hải Phòng - Cân 1" in subjects
+    assert all(recipients == ["sondn@vns.ai.vn"] for _, _, recipients in sent)
+    assert "Mất kết nối" in bodies
+    assert "Đã kết nối lại" in bodies
+    assert "Đang kết nối" in bodies
+    assert "Vượt ngưỡng" in bodies
+    assert "Bình thường" in bodies
