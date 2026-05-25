@@ -14,6 +14,16 @@ def test_send_status_email_skips_incomplete_config(monkeypatch):
     assert alert.send_status_email("subject", "<p>body</p>", ["ops@example.com"]) is False
 
 
+def test_send_status_email_skips_empty_recipients(monkeypatch):
+    monkeypatch.setattr(config, "EMAIL_ENABLED", True)
+    monkeypatch.setattr(config, "SENDER_EMAIL", "sender@example.com")
+    monkeypatch.setattr(config, "SENDER_PASSWORD", "secret")
+
+    alert = EmailAlert()
+
+    assert alert.send_status_email("subject", "<p>body</p>", []) is False
+
+
 def test_send_status_email_quits_server_on_send_failure(monkeypatch):
     events = []
 

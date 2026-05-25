@@ -52,19 +52,23 @@ def _is_valid_aiboxes(value) -> bool:
     )
 
 
-def _is_valid_recipients(value) -> bool:
+def _is_valid_recipient_list(value, allow_empty: bool = False) -> bool:
     return (
         isinstance(value, list)
-        and bool(value)
+        and (allow_empty or bool(value))
         and all(isinstance(email, str) and email for email in value)
     )
+
+
+def _is_valid_recipients(value) -> bool:
+    return _is_valid_recipient_list(value)
 
 
 def _is_valid_recipient_groups(value) -> bool:
     return (
         isinstance(value, dict)
         and all(isinstance(name, str) and name for name in value)
-        and all(_is_valid_recipients(recipients) for recipients in value.values())
+        and all(_is_valid_recipient_list(recipients, allow_empty=True) for recipients in value.values())
     )
 
 
@@ -88,8 +92,8 @@ def _aibox_config_error(value) -> str | None:
     ):
         return "must be an object with non-empty name"
 
-    if not _is_valid_recipients(value.get("recipients")):
-        return "recipients must be a non-empty list of email strings"
+    if not _is_valid_recipient_list(value.get("recipients"), allow_empty=True):
+        return "recipients must be a list of email strings"
 
     if "targets" in value and not _is_valid_target_map(value["targets"]):
         return "targets must be an object of IP/name strings"
@@ -190,9 +194,9 @@ def _normalize_v2_config(value: dict) -> list[dict]:
     ]
 
     for item in aiboxes:
-        recipients = item.get("resource_recipients") or default_recipients
-        if not _is_valid_recipients(recipients):
-            raise ValueError(f"v2 resource_recipients for {item.get('name', '<unknown>')} must be a non-empty list of email strings")
+        recipients = item["resource_recipients"] if "resource_recipients" in item else default_recipients
+        if not _is_valid_recipient_list(recipients, allow_empty=True):
+            raise ValueError(f"v2 resource_recipients for {item.get('name', '<unknown>')} must be a list of email strings")
         normalized.append(
             {
                 "id": item.get("id", item["ip"]),
@@ -218,7 +222,9 @@ def _normalize_v2_config(value: dict) -> list[dict]:
             for item in aiboxes
             if item.get("check-devices", False) and any(network in item.get("networks", []) for network in networks)
         ]
-        recipients = scope.get("recipients") or default_recipients
+        recipients = scope["recipients"] if "recipients" in scope else default_recipients
+        if not _is_valid_recipient_list(recipients, allow_empty=True):
+            raise ValueError(f"v2 recipients for target scope {scope.get('name', '<unknown>')} must be a list of email strings")
         normalized.append(
             {
                 "id": scope["id"],
