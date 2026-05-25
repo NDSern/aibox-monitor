@@ -133,6 +133,44 @@ class AiboxMonitor:
         }
 
     @staticmethod
+    def _aibox_status_groups(aibox_configs: list[dict]) -> dict[str, dict]:
+        fallback_targets = {}
+        fallback_recipients = None
+        for aibox in aibox_configs:
+            if not (aibox["check-devices"] and aibox["local"]):
+                continue
+            recipient_groups = aibox.get("recipient_groups")
+            status_groups = aibox.get("status_recipient_groups")
+            if not recipient_groups or not status_groups:
+                if fallback_recipients is None:
+                    fallback_recipients = list(aibox["recipients"])
+                fallback_targets.update(aibox["targets"])
+                continue
+
+            grouped = {}
+            for ip_address, name in aibox["targets"].items():
+                group_name = status_groups[ip_address]
+                group = grouped.setdefault(
+                    group_name,
+                    {
+                        "recipients": list(recipient_groups[group_name]),
+                        "name": f"Nhóm AIBOX {group_name}",
+                        "targets": {},
+                    },
+                )
+                group["targets"][ip_address] = name
+            return grouped
+        if fallback_targets and fallback_recipients is not None:
+            return {
+                "aibox_report": {
+                    "recipients": fallback_recipients,
+                    "name": "Tất cả AIBOX",
+                    "targets": fallback_targets,
+                }
+            }
+        return {}
+
+    @staticmethod
     def _target_key(aibox_ip: str, target_ip: str) -> str:
         return f"{aibox_ip}:{target_ip}"
 
@@ -560,16 +598,27 @@ print(json.dumps({
                 self.aibox_status[ip_address] = is_online
 
         if all_changed_statuses:
-            logger.info(f"Sending grouped AIBOX status-change email: {len(all_changed_statuses)} change(s)")
-            self._send_aibox_status_change_email(
-                {
-                    "name": "Tất cả AIBOX",
-                    "recipients": self._aibox_report_recipients(checked_aibox_configs),
-                    "targets": aiboxes,
-                },
-                timestamp,
-                all_changed_statuses,
-            )
+            for group_name, group in self._aibox_status_groups(checked_aibox_configs).items():
+                group_changed_statuses = {
+                    ip_address: status
+                    for ip_address, status in all_changed_statuses.items()
+                    if ip_address in group["targets"]
+                }
+                if not group_changed_statuses:
+                    continue
+                logger.info(
+                    f"Sending grouped AIBOX status-change email for {group_name}: "
+                    f"{len(group_changed_statuses)} change(s)"
+                )
+                self._send_aibox_status_change_email(
+                    {
+                        "name": group.get("name", f"Nhóm AIBOX {group_name}"),
+                        "recipients": group["recipients"],
+                        "targets": group["targets"],
+                    },
+                    timestamp,
+                    group_changed_statuses,
+                )
 
         return recovered_aibox_ips
 
@@ -679,12 +728,13 @@ print(json.dumps({
         timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
         logger.info(f"Sending scheduled status summaries for slot {summary_slot}")
         aibox_configs = config.get_aibox_configs()
-        aibox_report_targets = self._aibox_report_targets(aibox_configs)
-        if aibox_report_targets:
+        aibox_status_groups = self._aibox_status_groups(aibox_configs)
+        for group_name, group in aibox_status_groups.items():
+            logger.info(f"Sending scheduled AIBOX status summary for {group_name}")
             self._send_status_summary_email(
                 timestamp,
-                self._aibox_report_recipients(aibox_configs),
-                aibox_report_targets,
+                group["recipients"],
+                group["targets"],
             )
 
         for aibox in aibox_configs:

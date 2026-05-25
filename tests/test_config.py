@@ -224,3 +224,108 @@ def test_aibox_config_list_error_identifies_invalid_item():
     )
 
     assert error == "item 0 (Bad Remote): non-local enabled checks require non-empty user"
+
+
+def test_v2_config_supports_status_recipient_groups_and_resource_recipients(tmp_path, monkeypatch):
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "recipient_groups": {
+                    "aibox_report": ["status@example.com"],
+                    "group2": ["group2@example.com"],
+                },
+                "default_status_recipient_group": "aibox_report",
+                "default_recipients": ["default@example.com"],
+                "aiboxes": [
+                    {
+                        "id": "box-1",
+                        "name": "Box 1",
+                        "user": "linaro",
+                        "ip": "192.0.2.10",
+                        "check-devices": True,
+                        "check-resource": True,
+                        "status_recipient_group": "group2",
+                        "resource_recipients": ["resource@example.com"],
+                    }
+                ],
+                "target_scopes": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(config, "AIBOX_CONFIG_FILE", str(path))
+    monkeypatch.setattr(config, "_aibox_config_cache", [])
+
+    configs = config.get_aibox_configs()
+
+    assert configs[0]["recipient_groups"] == {
+        "aibox_report": ["status@example.com"],
+        "group2": ["group2@example.com"],
+    }
+    assert configs[0]["status_recipient_groups"] == {"192.0.2.10": "group2"}
+    assert configs[1]["recipients"] == ["resource@example.com"]
+
+
+def test_v2_config_defaults_status_group_from_legacy_report_recipients(tmp_path, monkeypatch):
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "aibox_report_recipients": ["status@example.com"],
+                "default_recipients": ["default@example.com"],
+                "aiboxes": [
+                    {
+                        "name": "Box 1",
+                        "user": "linaro",
+                        "ip": "192.0.2.10",
+                        "check-devices": True,
+                        "check-resource": True,
+                    }
+                ],
+                "target_scopes": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(config, "AIBOX_CONFIG_FILE", str(path))
+    monkeypatch.setattr(config, "_aibox_config_cache", [])
+
+    configs = config.get_aibox_configs()
+
+    assert configs[0]["recipient_groups"] == {"aibox_report": ["status@example.com"]}
+    assert configs[0]["status_recipient_groups"] == {"192.0.2.10": "aibox_report"}
+    assert configs[1]["recipients"] == ["default@example.com"]
+
+
+def test_v2_config_rejects_unknown_status_recipient_group(tmp_path, monkeypatch):
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "recipient_groups": {"aibox_report": ["status@example.com"]},
+                "default_recipients": ["default@example.com"],
+                "aiboxes": [
+                    {
+                        "name": "Box 1",
+                        "user": "linaro",
+                        "ip": "192.0.2.10",
+                        "check-devices": True,
+                        "status_recipient_group": "missing",
+                    }
+                ],
+                "target_scopes": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(config, "AIBOX_CONFIG_FILE", str(path))
+    monkeypatch.setattr(config, "_aibox_config_cache", [])
+
+    assert config.get_aibox_configs() == []

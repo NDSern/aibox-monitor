@@ -60,6 +60,14 @@ def _is_valid_recipients(value) -> bool:
     )
 
 
+def _is_valid_recipient_groups(value) -> bool:
+    return (
+        isinstance(value, dict)
+        and all(isinstance(name, str) and name for name in value)
+        and all(_is_valid_recipients(recipients) for recipients in value.values())
+    )
+
+
 def _is_valid_target_map(value) -> bool:
     return (
         isinstance(value, dict)
@@ -85,6 +93,18 @@ def _aibox_config_error(value) -> str | None:
 
     if "targets" in value and not _is_valid_target_map(value["targets"]):
         return "targets must be an object of IP/name strings"
+
+    if "recipient_groups" in value and not _is_valid_recipient_groups(value["recipient_groups"]):
+        return "recipient_groups must be an object of recipient-list values"
+
+    if "status_recipient_groups" in value:
+        groups = value["status_recipient_groups"]
+        if not (
+            isinstance(groups, dict)
+            and all(isinstance(ip, str) and ip for ip in groups)
+            and all(isinstance(group, str) and group for group in groups.values())
+        ):
+            return "status_recipient_groups must be an object of IP/group strings"
 
     check_devices = value.get("check-devices", False)
     if not isinstance(check_devices, bool):
@@ -128,13 +148,31 @@ def _aibox_config_list_error(value) -> str | None:
 
 
 def _normalize_v2_config(value: dict) -> list[dict]:
-    default_recipients = value.get("aibox_report_recipients") or value.get("default_recipients") or DEFAULT_RECIPIENT_EMAILS
+    legacy_aibox_report_recipients = value.get("aibox_report_recipients")
+    default_recipients = value.get("default_recipients") or legacy_aibox_report_recipients or DEFAULT_RECIPIENT_EMAILS
     if not _is_valid_recipients(default_recipients):
         raise ValueError("v2 default recipients must be a non-empty list of email strings")
+    recipient_groups = dict(value.get("recipient_groups") or {})
+    if legacy_aibox_report_recipients and "aibox_report" not in recipient_groups:
+        recipient_groups["aibox_report"] = list(legacy_aibox_report_recipients)
+    if not recipient_groups:
+        recipient_groups["aibox_report"] = list(default_recipients)
+    if not _is_valid_recipient_groups(recipient_groups):
+        raise ValueError("v2 recipient_groups must be an object of recipient-list values")
+    default_status_group = value.get("default_status_recipient_group") or "aibox_report"
+    if not isinstance(default_status_group, str) or default_status_group not in recipient_groups:
+        raise ValueError("v2 default_status_recipient_group must exist in recipient_groups")
     aiboxes = value.get("aiboxes")
     target_scopes = value.get("target_scopes", [])
     if not isinstance(aiboxes, list) or not isinstance(target_scopes, list):
         raise ValueError("v2 config requires aiboxes and target_scopes lists")
+
+    status_recipient_groups = {}
+    for item in aiboxes:
+        group_name = item.get("status_recipient_group") or default_status_group
+        if not isinstance(group_name, str) or group_name not in recipient_groups:
+            raise ValueError(f"v2 status_recipient_group for {item.get('name', '<unknown>')} must exist in recipient_groups")
+        status_recipient_groups[item["ip"]] = group_name
 
     normalized = [
         {
@@ -144,13 +182,17 @@ def _normalize_v2_config(value: dict) -> list[dict]:
             "local": True,
             "user": "",
             "ip": "",
-            "recipients": list(default_recipients),
+            "recipients": list(recipient_groups[default_status_group]),
             "targets": {item["ip"]: item["name"] for item in aiboxes},
+            "recipient_groups": recipient_groups,
+            "status_recipient_groups": status_recipient_groups,
         }
     ]
 
     for item in aiboxes:
-        recipients = item.get("recipients") or default_recipients
+        recipients = item.get("resource_recipients") or default_recipients
+        if not _is_valid_recipients(recipients):
+            raise ValueError(f"v2 resource_recipients for {item.get('name', '<unknown>')} must be a non-empty list of email strings")
         normalized.append(
             {
                 "id": item.get("id", item["ip"]),
@@ -249,6 +291,13 @@ def get_aibox_configs() -> list[dict]:
                 normalized_item["id"] = item["id"]
             if "checkers" in item:
                 normalized_item["checkers"] = list(item["checkers"])
+            if "recipient_groups" in item:
+                normalized_item["recipient_groups"] = {
+                    name: list(recipients)
+                    for name, recipients in item["recipient_groups"].items()
+                }
+            if "status_recipient_groups" in item:
+                normalized_item["status_recipient_groups"] = dict(item["status_recipient_groups"])
             _aibox_config_cache.append(normalized_item)
     except (OSError, json.JSONDecodeError, ValueError) as e:
         logger.warning(f"Using cached AIBOX target config after failed JSON load: {e}")
@@ -269,6 +318,13 @@ def get_aibox_configs() -> list[dict]:
             config_item["id"] = item["id"]
         if "checkers" in item:
             config_item["checkers"] = list(item["checkers"])
+        if "recipient_groups" in item:
+            config_item["recipient_groups"] = {
+                name: list(recipients)
+                for name, recipients in item["recipient_groups"].items()
+            }
+        if "status_recipient_groups" in item:
+            config_item["status_recipient_groups"] = dict(item["status_recipient_groups"])
         configs.append(config_item)
     return configs
 

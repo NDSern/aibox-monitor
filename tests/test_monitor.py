@@ -179,6 +179,54 @@ def test_aibox_status_changes_use_single_existing_recipient_list(monkeypatch):
     assert sent[0][2] == {"192.0.2.1": "Mất kết nối", "192.0.2.2": "Mất kết nối"}
 
 
+def test_aibox_status_changes_send_one_email_per_status_group(monkeypatch):
+    monitor = AiboxMonitor()
+    monitor.aibox_status = {"192.0.2.1": True, "192.0.2.2": True, "192.0.2.3": True}
+    sent = []
+
+    monkeypatch.setattr(
+        config,
+        "get_aibox_configs",
+        lambda: [
+            {
+                "name": "Local",
+                "check-devices": True,
+                "check-resource": False,
+                "local": True,
+                "user": "",
+                "ip": "",
+                "recipients": ["fallback@example.com"],
+                "targets": {
+                    "192.0.2.1": "Box 1",
+                    "192.0.2.2": "Box 2",
+                    "192.0.2.3": "Box 3",
+                },
+                "recipient_groups": {
+                    "group1": ["g1@example.com"],
+                    "group2": ["g2@example.com"],
+                },
+                "status_recipient_groups": {
+                    "192.0.2.1": "group1",
+                    "192.0.2.2": "group1",
+                    "192.0.2.3": "group2",
+                },
+            }
+        ],
+    )
+    monkeypatch.setattr(monitor, "_ping_host", lambda ip: False)
+    monkeypatch.setattr(monitor, "_send_aibox_status_change_email", lambda *args: sent.append(args))
+
+    monitor.check_aiboxes()
+
+    assert len(sent) == 2
+    assert sent[0][0]["recipients"] == ["g1@example.com"]
+    assert sent[0][0]["targets"] == {"192.0.2.1": "Box 1", "192.0.2.2": "Box 2"}
+    assert sent[0][2] == {"192.0.2.1": "Mất kết nối", "192.0.2.2": "Mất kết nối"}
+    assert sent[1][0]["recipients"] == ["g2@example.com"]
+    assert sent[1][0]["targets"] == {"192.0.2.3": "Box 3"}
+    assert sent[1][2] == {"192.0.2.3": "Mất kết nối"}
+
+
 def _set_now(monkeypatch, value: datetime):
     class FixedDatetime:
         @classmethod
@@ -238,6 +286,51 @@ def test_status_summary_uses_single_existing_aibox_recipient_list(monkeypatch):
     assert len(sent) == 1
     assert sent[0][1] == ["a@example.com"]
     assert sent[0][2] == {"192.0.2.1": "Box 1", "192.0.2.2": "Box 2"}
+
+
+def test_status_summary_sends_one_email_per_status_group(monkeypatch):
+    monitor = AiboxMonitor()
+    sent = []
+
+    monkeypatch.setattr(
+        config,
+        "get_aibox_configs",
+        lambda: [
+            {
+                "name": "Local",
+                "check-devices": True,
+                "check-resource": False,
+                "local": True,
+                "user": "",
+                "ip": "",
+                "recipients": ["fallback@example.com"],
+                "targets": {
+                    "192.0.2.1": "Box 1",
+                    "192.0.2.2": "Box 2",
+                    "192.0.2.3": "Box 3",
+                },
+                "recipient_groups": {
+                    "group1": ["g1@example.com"],
+                    "group2": ["g2@example.com"],
+                },
+                "status_recipient_groups": {
+                    "192.0.2.1": "group1",
+                    "192.0.2.2": "group1",
+                    "192.0.2.3": "group2",
+                },
+            }
+        ],
+    )
+    _set_now(monkeypatch, datetime(2026, 5, 15, 12, 0, 0))
+    monkeypatch.setattr(monitor, "_send_status_summary_email", lambda *args: sent.append(args))
+
+    monitor.send_scheduled_status_summaries()
+
+    assert len(sent) == 2
+    assert sent[0][1] == ["g1@example.com"]
+    assert sent[0][2] == {"192.0.2.1": "Box 1", "192.0.2.2": "Box 2"}
+    assert sent[1][1] == ["g2@example.com"]
+    assert sent[1][2] == {"192.0.2.3": "Box 3"}
 
 
 def test_status_summary_waits_before_configured_hour(monkeypatch):
