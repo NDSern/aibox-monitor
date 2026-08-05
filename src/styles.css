@@ -4518,3 +4518,105 @@ h3 { font-size: clamp(1.2rem, 2vw, 1.55rem); font-weight: 780; margin: 0 0 0.25r
   .fleetNetworkSelector { grid-template-columns: 1fr; }
   .fleetShell .cameraMeta { align-items: flex-start; flex-direction: column; }
 }
+
+/* Shared primary navigation contract for Overview and Fleet. */
+:is(.dashboardOnlyShell, .fleetShell) {
+  grid-template-columns: 5rem minmax(0, 1fr);
+}
+
+:is(.dashboardOnlyShell, .fleetShell) .sideRail {
+  background: #101d33;
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: inset -1px 0 rgba(255, 255, 255, 0.04);
+  color: #edf3fb;
+  gap: 0.65rem;
+  padding: 0.65rem 0.45rem;
+}
+
+:is(.dark.dashboardOnlyShell, .dark.fleetShell) .sideRail { background: #050c17; }
+
+:is(.dashboardOnlyShell, .fleetShell) .railLogo {
+  background: #2b6fe8;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 0.55rem;
+  box-shadow: none;
+  height: 2.65rem;
+  width: 2.65rem;
+}
+
+:is(.dashboardOnlyShell, .fleetShell) .railNav { gap: 0.3rem; }
+
+:is(.dashboardOnlyShell, .fleetShell) .railButton {
+  align-items: center;
+  border-radius: 0.55rem;
+  color: #aebdd1;
+  display: grid;
+  gap: 0.15rem;
+  height: 3.35rem;
+  justify-items: center;
+  padding: 0.42rem 0.2rem;
+}
+
+:is(.dashboardOnlyShell, .fleetShell) .railButton span {
+  color: currentColor;
+  display: block;
+  font-size: 0.6rem;
+  font-weight: 750;
+  line-height: 1;
+}
+
+:is(.dashboardOnlyShell, .fleetShell) .railButton.active {
+  background: #eaf1fc;
+  color: #175cd3;
+}
+
+:is(.dark.dashboardOnlyShell, .dark.fleetShell) .railButton.active {
+  background: #18345b;
+  color: #a9cbff;
+}
+
+:is(.dashboardOnlyShell, .fleetShell) .railUtility {
+  align-items: center;
+  color: #b8c5d7;
+  display: grid;
+  gap: 0.3rem;
+  justify-items: center;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  :is(.dashboardOnlyShell, .fleetShell) .railButton:hover { background: rgba(255, 255, 255, 0.08); color: #aebdd1; }
+  :is(.dashboardOnlyShell, .fleetShell) .railButton.active:hover { background: #e8f0ff; color: #175cd3; }
+  :is(.dark.dashboardOnlyShell, .dark.fleetShell) .railButton.active:hover { background: #18345b; color: #a9cbff; }
+}
+
+@media (max-width: 1100px) and (min-width: 761px) {
+  :is(.dashboardOnlyShell, .fleetShell) { grid-template-columns: 4.5rem minmax(0, 1fr); }
+  :is(.dashboardOnlyShell, .fleetShell) .sideRail { padding-inline: 0.3rem; }
+  :is(.dashboardOnlyShell, .fleetShell) .railButton span { font-size: 0.55rem; }
+}
+
+@media (max-width: 760px) {
+  :is(.dashboardOnlyShell, .fleetShell) { display: block; }
+  :is(.dashboardOnlyShell, .fleetShell) .sideRail {
+    height: 3.5rem;
+    padding: 0.35rem 0.55rem;
+    position: sticky;
+    top: 0;
+    z-index: 5;
+  }
+  :is(.dashboardOnlyShell, .fleetShell) .railLogo,
+  :is(.dashboardOnlyShell, .fleetShell) .railButton { height: 2.7rem; }
+  :is(.dashboardOnlyShell, .fleetShell) .railLogo { width: 2.7rem; }
+  :is(.dashboardOnlyShell, .fleetShell) .railNav { gap: 0.25rem; }
+  :is(.dashboardOnlyShell, .fleetShell) .railButton {
+    display: flex;
+    gap: 0.35rem;
+    min-width: 5.5rem;
+    padding-inline: 0.65rem;
+  }
+  :is(.dashboardOnlyShell, .fleetShell) .railButton span { font-size: 0.68rem; }
+  :is(.dashboardOnlyShell, .fleetShell) .railUtility {
+    min-height: 2.7rem;
+    min-width: 2.7rem;
+  }
+}
