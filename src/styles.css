@@ -2576,8 +2576,57 @@ h3 { font-size: clamp(1.2rem, 2vw, 1.55rem); font-weight: 780; margin: 0 0 0.25r
 .dashboardOnlyShell .networkMatrixGrid,
 .dashboardOnlyShell .networkCameraGrid { overflow: hidden; }
 
-.dashboardOnlyShell .networkMatrixTile { grid-template-rows: auto minmax(0, 1fr); }
+.dashboardOnlyShell .networkMatrixTile { grid-template-rows: auto auto minmax(0, 1fr); }
 .networkHeaderMeta { gap: 0.22rem; }
+
+.networkMonitorHealth {
+  align-items: center;
+  background: #fff8e7;
+  border: 1px solid #dfc57d;
+  border-radius: 0.4rem;
+  color: #604c18;
+  display: grid;
+  gap: 0.4rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-height: 2rem;
+  padding: 0.25rem 0.4rem;
+  text-align: left;
+  width: 100%;
+}
+
+.networkMonitorState {
+  display: grid;
+  min-width: 0;
+}
+
+.networkMonitorState strong,
+.networkMonitorState small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.networkMonitorState strong { color: #6c5112; font-size: 0.64rem; font-weight: 900; }
+.networkMonitorState small { color: #7b692f; font-size: 0.54rem; font-weight: 750; }
+.networkMonitorHealth b { color: #8b6500; font-size: 0.62rem; font-weight: 900; white-space: nowrap; }
+
+.networkMonitorHealth.healthy {
+  background: #eef9f3;
+  border-color: #a9d8c1;
+}
+.networkMonitorHealth.healthy .networkMonitorState strong,
+.networkMonitorHealth.healthy b { color: #086b4a; }
+.networkMonitorHealth.healthy .networkMonitorState small { color: #427662; }
+
+.dark .networkMonitorHealth { background: #2d281b; border-color: #695c34; color: #ead995; }
+.dark .networkMonitorState strong,
+.dark .networkMonitorHealth b { color: #f2cc60; }
+.dark .networkMonitorState small { color: #cfbd80; }
+.dark .networkMonitorHealth.healthy { background: #112f2b; border-color: #34775e; }
+.dark .networkMonitorHealth.healthy .networkMonitorState strong,
+.dark .networkMonitorHealth.healthy b { color: #5ee0a0; }
+.dark .networkMonitorHealth.healthy .networkMonitorState small { color: #9acbb6; }
 
 .dashboardOnlyShell .networkMatrix > .matrixHeader {
   align-items: center;

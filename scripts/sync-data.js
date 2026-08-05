@@ -585,6 +585,7 @@ function normalize(config) {
         id: scope.id,
         name: scope.name,
         monitorStatus: scopeUnavailable ? "unknown" : "online",
+        monitorStatusSince: scopeUnavailable ? unavailableSince : scopeStatus ? scopeStatus.statusSince : null,
         monitorAiboxes,
         monitors: scope.recipients || defaultRecipients,
         cameras: Object.entries(scope.targets || {}).map(([ip, name]) => {

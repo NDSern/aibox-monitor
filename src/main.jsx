@@ -448,6 +448,38 @@ function OperationsRibbon({ aiboxes, focuses, networks, onFocus, paused }) {
   );
 }
 
+function NetworkMonitorHealth({ network, now, onFocus }) {
+  const checkers = network.monitorAiboxes || [];
+  const onlineCheckers = checkers.filter((box) => box.status === "online").length;
+  const unknownCameras = (network.cameras || []).filter((camera) => camera.status === "unknown").length;
+  const blind = network.monitorStatus !== "online";
+  const degraded = !blind && onlineCheckers < checkers.length;
+  const degradedSince = checkers
+    .filter((box) => box.status !== "online" && box.statusSince)
+    .sort((a, b) => new Date(a.statusSince) - new Date(b.statusSince))[0]?.statusSince;
+  const since = blind
+    ? network.monitorStatusSince || (network.cameras || []).find((camera) => camera.status === "unknown" && camera.statusSince)?.statusSince
+    : degraded ? degradedSince : null;
+  const duration = formatDuration(since, now);
+  const checkerSummary = checkers.length ? `${onlineCheckers}/${checkers.length} checkers online` : "No checker assigned";
+  const cause = blind && onlineCheckers ? "Scope telemetry unavailable" : blind ? "No healthy checker" : degraded ? "Monitoring degraded" : "Monitoring healthy";
+  const state = blind ? "blind" : degraded ? "degraded" : "healthy";
+  const impact = blind ? `${unknownCameras} blind` : degraded ? `${onlineCheckers}/${checkers.length} online` : "Healthy";
+
+  return (
+    <button
+      aria-label={`${network.name}: ${cause}. ${checkerSummary}. ${unknownCameras} cameras without telemetry${duration ? ` for ${duration}` : ""}. Focus network.`}
+      className={`networkMonitorHealth ${state}`}
+      onClick={() => onFocus(network.id)}
+      title={`Focus ${network.name}`}
+      type="button"
+    >
+      <span className="networkMonitorState"><strong>{cause}</strong><small>{checkerSummary}{duration ? ` · ${duration}` : ""}</small></span>
+      <b>{impact}</b>
+    </button>
+  );
+}
+
 function NeedAttention({ aiboxes, networks, onFocusNetwork, onShowOffline }) {
   const panelRef = useRef(null);
   const [visibleIssueCount, setVisibleIssueCount] = useState(3);
@@ -457,7 +489,9 @@ function NeedAttention({ aiboxes, networks, onFocusNetwork, onShowOffline }) {
   const affectedNetworks = networks.map((network) => {
     const offline = network.cameras.filter((camera) => camera.status === "offline").length;
     const unknown = network.cameras.filter((camera) => camera.status === "unknown").length;
-    return { ...network, offline, unknown, affected: offline + unknown };
+    const checkers = network.monitorAiboxes || [];
+    const onlineCheckers = checkers.filter((box) => box.status === "online").length;
+    return { ...network, offline, unknown, affected: offline + unknown, checkers, onlineCheckers };
   }).filter((network) => network.affected).sort((a, b) => b.offline - a.offline || b.unknown - a.unknown);
   const issueCount = offlineAiboxes.length + affectedNetworks.length;
   const maximumVisible = Math.max(3, offlineAiboxes.length, affectedNetworks.length);
@@ -503,7 +537,7 @@ function NeedAttention({ aiboxes, networks, onFocusNetwork, onShowOffline }) {
           <div className="attentionCategoryHead"><strong>Camera networks</strong><span>{affectedNetworks.length} affected</span></div>
           {affectedNetworks.length ? affectedNetworks.slice(0, visibleIssueCount).map((network) => (
             <button className="attentionDevice" key={network.id} onClick={() => onFocusNetwork(network.id)} title={`Focus ${network.name}`} type="button">
-              <StatusSymbol status={network.offline ? "offline" : "unknown"} /><span><strong>{compactDeviceName(network.name)}</strong><small>{network.offline ? `${network.offline} offline` : `${network.unknown} unknown`}</small></span><b>{network.affected}/{network.cameras.length}</b>
+              <StatusSymbol status={network.offline ? "offline" : "unknown"} /><span><strong>{compactDeviceName(network.name)}</strong><small>{network.monitorStatus === "unknown" ? `${network.checkers.length ? `${network.onlineCheckers}/${network.checkers.length} checkers` : "No checker"} · telemetry blind` : network.offline ? `${network.offline} offline` : `${network.unknown} unknown`}</small></span><b>{network.affected}/{network.cameras.length}</b>
             </button>
           )) : <div className="attentionEmpty">All cameras reporting</div>}
         </div>
@@ -1636,6 +1670,7 @@ function App() {
                           <div><strong>{compactDeviceName(network.name)}</strong><span className="mono">{network.id}</span></div>
                           <div className="networkStatusMini" aria-label={`${networkSummary.online || 0} online, ${networkSummary.offline || 0} offline, ${networkSummary.unknown || 0} unknown, ${network.cameras.length} total cameras`}><span className="good"><strong>{networkSummary.online || 0}</strong><small>on</small></span><span className="bad"><strong>{networkSummary.offline || 0}</strong><small>off</small></span><span className="unknown"><strong>{networkSummary.unknown || 0}</strong><small>unknown</small></span><span className="total"><strong>{network.cameras.length}</strong><small>total</small></span></div>
                         </header>
+                        <NetworkMonitorHealth network={network} now={now} onFocus={focusDashboard} />
                         <MeasuredPageDeck activePage={cameraStep} ariaLabel={`${network.name} automatically rotating cameras`} className="cameraAutoDeck" items={network.cameras} maxColumns={mobileDashboard ? 2 : 4} minHeight={mobileDashboard ? 32 : 34} minWidth={mobileDashboard ? 130 : 132} onPageMeta={(meta) => updateCameraPageMeta(network.id, meta)} renderItem={(camera) => (
                           <div aria-label={`${camera.name}, IP ${camera.ip}, ${statusLabel(camera.status)}`} className={`networkCameraTile ${camera.status} ${draggedCamera.networkId === network.id && draggedCamera.ip === camera.ip ? "dragging" : ""} ${cameraInsert.networkId === network.id && cameraInsert.ip === camera.ip ? `dragOver insert-${cameraInsert.position}` : ""}`} draggable="false" key={`${network.id}-${camera.ip}`} title={`${camera.name} · ${camera.ip}`}>
                              <StatusSymbol status={camera.status} /><RollingName className="cameraIp mono" name={camera.ip} />{typeof camera.availability === "number" ? <small className="tileAvailability" title="Rolling 7-day availability">{formatAvailability(camera.availability)}</small> : null}
