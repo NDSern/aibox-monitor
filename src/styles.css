@@ -4182,3 +4182,339 @@ h3 { font-size: clamp(1.2rem, 2vw, 1.55rem); font-weight: 780; margin: 0 0 0.25r
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Fleet control room: one bounded desktop workspace, natural mobile flow. */
+.fleetCommandBand {
+  background: color-mix(in srgb, var(--surface-strong) 94%, transparent);
+  border-radius: 0.85rem;
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: minmax(17rem, 1fr) auto auto;
+  padding: 0.72rem 0.9rem;
+}
+
+.fleetCommandBand .eyebrow {
+  font-size: 0.58rem;
+  letter-spacing: 0.12em;
+  margin-bottom: 0.12rem;
+}
+
+.fleetCommandBand h1 {
+  font-size: clamp(1.45rem, 2.4vw, 2rem);
+  letter-spacing: -0.045em;
+  line-height: 1;
+}
+
+.fleetCommandBand .subtitle {
+  font-size: 0.72rem;
+  line-height: 1.25;
+  margin-top: 0.24rem;
+  max-width: 64ch;
+}
+
+.fleetViewSwitch {
+  align-items: stretch;
+  background: color-mix(in srgb, var(--surface-soft) 88%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 0.65rem;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(5.3rem, 1fr));
+  padding: 0.22rem;
+}
+
+.fleetViewSwitch button {
+  background: transparent;
+  border: 0;
+  border-radius: 0.45rem;
+  color: var(--muted);
+  display: grid;
+  gap: 0.02rem 0.2rem;
+  grid-template-columns: auto auto;
+  justify-content: center;
+  min-height: 2.55rem;
+  padding: 0.28rem 0.52rem;
+}
+
+.fleetViewSwitch button strong {
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.fleetViewSwitch button span { font-size: 0.68rem; font-weight: 800; }
+.fleetViewSwitch button.active {
+  background: var(--surface-strong);
+  box-shadow: 0 0.15rem 0.45rem rgba(15, 23, 42, 0.1);
+  color: var(--accent-strong);
+}
+.fleetViewSwitch button.active strong { color: var(--accent-strong); }
+
+.fleetCommandBand .heroControls {
+  align-items: center;
+  flex-direction: row;
+  gap: 0.4rem;
+}
+
+.fleetCommandBand .heroAction {
+  border-radius: 0.5rem;
+  font-size: 0.68rem;
+  min-height: 2.25rem;
+  padding: 0.38rem 0.64rem;
+  width: auto;
+}
+
+.fleetWorkspace,
+.fleetWorkspacePanel,
+.fleetWorkspacePanel > .card-body,
+.fleetNetworkStage,
+.fleetNetworkStage > .networkCard { min-height: 0; }
+
+.fleetWorkspacePanel { overflow: hidden; }
+.fleetWorkspacePanel > .card-body { height: 100%; }
+
+.fleetControlRow {
+  align-items: center;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.fleetPager {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.25rem;
+}
+
+.fleetPager button {
+  align-items: center;
+  background: var(--surface-strong);
+  border: 1px solid var(--border);
+  border-radius: 0.42rem;
+  color: var(--text);
+  display: inline-flex;
+  height: 2rem;
+  justify-content: center;
+  padding: 0;
+  width: 2rem;
+}
+
+.fleetPager button:disabled { cursor: not-allowed; opacity: 0.38; }
+.fleetPageRange,
+.fleetPageCount {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.fleetPageRange { min-width: 5rem; text-align: right; }
+.fleetPageCount { min-width: 2rem; text-align: center; }
+
+.fleetNetworkSelector {
+  display: grid;
+  gap: 0.4rem;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  margin-bottom: 0.5rem;
+}
+
+.fleetNetworkSelector button {
+  align-items: center;
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  color: var(--text);
+  display: grid;
+  gap: 0.1rem 0.5rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-height: 2.8rem;
+  padding: 0.38rem 0.55rem;
+  text-align: left;
+}
+
+.fleetNetworkSelector button strong,
+.fleetNetworkSelector button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fleetNetworkSelector button strong { font-size: 0.76rem; }
+.fleetNetworkSelector button span { color: var(--muted); font-size: 0.62rem; }
+.fleetNetworkSelector button b { font-size: 0.86rem; grid-column: 2; grid-row: 1 / 3; }
+.fleetNetworkSelector button.active {
+  background: color-mix(in srgb, var(--accent) 11%, var(--surface-strong));
+  border-color: color-mix(in srgb, var(--accent) 52%, var(--border));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.networkMetaActions { align-items: center; display: flex; gap: 0.4rem; }
+.networkMetaActions .aiboxNoteTray { flex: 0 0 auto; margin: 0; }
+
+.dark .fleetViewSwitch { background: #0c1728; border-color: #34445a; }
+.dark .fleetViewSwitch button.active { background: #20354f; box-shadow: none; color: #73e0b1; }
+.dark .fleetViewSwitch button.active strong { color: #73e0b1; }
+.dark .fleetPager button { background: #17263b; border-color: #40516a; }
+.dark .fleetNetworkSelector button { background: #132139; border-color: #344761; }
+.dark .fleetNetworkSelector button.active { background: #173b35; border-color: #3d876a; }
+
+@media (min-width: 901px) and (min-height: 621px) {
+  .fleetShell,
+  .fleetShell .appFrame {
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .fleetShell .topBar { position: static; }
+  .fleetShell .statusAlerts {
+    max-height: 3.1rem;
+    overflow: auto;
+  }
+
+  .fleetShell .fleetDetailView {
+    display: grid;
+    gap: 0.55rem;
+    grid-template-rows: auto auto minmax(0, 1fr);
+    height: 100%;
+    max-width: none;
+    min-height: 0;
+    overflow: hidden;
+    padding: 0.6rem clamp(0.65rem, 1vw, 1rem) 0.7rem !important;
+    width: 100%;
+  }
+
+  .fleetShell .summaryGrid { gap: 0.38rem; }
+  .fleetShell .stat {
+    border-radius: 0.55rem;
+    min-height: 3.3rem;
+    padding: 0.42rem 0.6rem;
+  }
+  .fleetShell .stat div { font-size: 0.68rem; font-weight: 750; }
+  .fleetShell .stat strong { font-size: 1.35rem; margin-top: 0.2rem; }
+
+  .fleetWorkspace { height: 100%; overflow: hidden; }
+  .fleetWorkspacePanel { border-radius: 0.75rem !important; height: 100%; }
+  .fleetWorkspacePanel > .card-body { padding: 0.62rem !important; }
+  .fleetWorkspacePanel .sectionHeader { margin-bottom: 0.42rem; }
+  .fleetWorkspacePanel .sectionHeader h2 { font-size: 1rem; }
+  .fleetWorkspacePanel .sectionMeta { font-size: 0.68rem; }
+  .fleetSectionHeader { min-height: 2.35rem; }
+  .fleetShell .fleetTools .btn,
+  .fleetShell .searchInput { border-radius: 0.5rem; min-height: 2.1rem; }
+  .fleetShell .filterRow { margin: 0; }
+  .fleetShell .filterChip { border-radius: 0.42rem; min-height: 2rem; }
+
+  #fleet-section > .card-body {
+    display: grid;
+    grid-template-rows: auto auto minmax(0, 1fr);
+  }
+
+  .fleetPagedGrid {
+    align-content: stretch;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+    height: 100%;
+    overflow: hidden;
+    padding-top: 0.5rem;
+  }
+  .fleetPagedGrid .aiboxShell,
+  .fleetPagedGrid .aiboxPill { height: 100%; min-height: 0; }
+  .fleetPagedGrid .aiboxPill { display: grid; grid-template-rows: auto auto minmax(0, 1fr); }
+  .fleetPagedGrid .aiboxPill > p { align-self: end; }
+
+  #fleet-camera-section > .card-body {
+    display: grid;
+    grid-template-rows: auto auto minmax(0, 1fr);
+  }
+
+  .fleetNetworkStage { height: 100%; overflow: hidden; }
+  .fleetNetworkStage > .networkCard {
+    display: grid;
+    grid-template-rows: auto auto auto minmax(0, 1fr);
+    height: 100%;
+    overflow: hidden;
+  }
+  .fleetCameraPagedGrid {
+    align-content: stretch;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-rows: repeat(var(--fleet-camera-rows, 4), minmax(0, 1fr));
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .fleetCameraPagedGrid .cameraCard { height: 100%; min-height: 0; }
+
+  .fleetWorkspace > .recentPanel > .card-body {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .fleetWorkspace > .recentPanel .recentNoteGrid {
+    align-content: start;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .fleetWorkspace > .recentPanel .recentNote { min-height: 7rem; }
+  .fleetShell .backToTop { display: none; }
+}
+
+@media (min-width: 1200px) and (min-height: 621px) {
+  .fleetPagedGrid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .fleetCameraPagedGrid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+@media (min-width: 1400px) and (min-height: 621px) {
+  .fleetPagedGrid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .fleetCameraPagedGrid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .fleetWorkspace > .recentPanel .recentNoteGrid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+}
+
+@media (min-width: 901px) and (min-height: 621px) and (max-height: 760px) {
+  .fleetCameraPagedGrid .cameraCard { padding: 0.28rem 0.38rem; }
+  .fleetCameraPagedGrid .cameraTop { align-items: center; min-width: 0; }
+  .fleetCameraPagedGrid .cameraTop strong {
+    font-size: 0.66rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .fleetCameraPagedGrid .cameraCard .pill { font-size: 0.52rem; padding: 0.14rem 0.22rem; }
+  .fleetCameraPagedGrid .cameraMeta { display: none; }
+}
+
+@media (max-width: 900px), (max-height: 620px) {
+  .fleetShell .fleetDetailView { display: flex; flex-direction: column; }
+  .fleetShell .fleetCommandBand { order: 0; }
+  .fleetShell .summaryGrid { order: 1; }
+  .fleetShell .fleetWorkspace { order: 2; }
+  .fleetCommandBand {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+  }
+  .fleetCommandBand .heroCopy { flex: 1 1 22rem; }
+  .fleetCommandBand .heroControls { margin-left: auto; }
+  .fleetWorkspace { display: flex; flex-direction: column; gap: 0.65rem; }
+  .fleetWorkspacePanel { overflow: visible; }
+  .fleetWorkspacePanel > .card-body { height: auto; }
+  .fleetCameraPagedGrid { height: auto; }
+}
+
+@media (max-width: 760px) {
+  .fleetCommandBand {
+    align-items: stretch;
+    display: flex;
+    padding: 0.8rem;
+  }
+  .fleetCommandBand h1 { font-size: 1.65rem; }
+  .fleetCommandBand .subtitle { font-size: 0.78rem; }
+  .fleetCommandBand .heroControls { margin: 0; width: 100%; }
+  .fleetCommandBand .heroCopy { flex: 0 0 auto; }
+  .fleetCommandBand .heroAction { min-height: 2.65rem; }
+  .fleetWorkspace { gap: 0.65rem; }
+  .fleetControlRow { align-items: stretch; flex-direction: column; }
+  .fleetNetworkStage { display: grid; gap: 0.65rem; }
+  .fleetNetworkSelector { grid-template-columns: 1fr; }
+  .fleetShell .cameraMeta { align-items: flex-start; flex-direction: column; }
+}

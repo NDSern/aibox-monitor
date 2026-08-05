@@ -570,6 +570,20 @@ function DashboardRecentNotes({ notes, lookup, now, onOpen }) {
   );
 }
 
+function FleetPager({ label, page, pageCount, pageSize, total, onPage }) {
+  if (!total) return <span className="fleetPageRange" role="status">No results</span>;
+  const start = page * pageSize + 1;
+  const end = Math.min(total, start + pageSize - 1);
+  return (
+    <div className="fleetPager" aria-label={`${label} pages`}>
+      <span className="fleetPageRange" role="status">{start}-{end} of {total}</span>
+      <button aria-label={`Previous ${label} page`} disabled={page <= 0} onClick={() => onPage(page - 1)} type="button"><CaretLeft aria-hidden="true" size={16} weight="bold" /></button>
+      <span className="fleetPageCount">{page + 1}/{pageCount}</span>
+      <button aria-label={`Next ${label} page`} disabled={page >= pageCount - 1} onClick={() => onPage(page + 1)} type="button"><CaretRight aria-hidden="true" size={16} weight="bold" /></button>
+    </div>
+  );
+}
+
 function App() {
   const [data, setData] = useState(EMPTY_DATA);
   const [loadError, setLoadError] = useState("");
@@ -614,8 +628,14 @@ function App() {
   const [networkPageMeta, setNetworkPageMeta] = useState({ capacity: 1, count: 1, page: 0 });
   const [cameraStep, setCameraStep] = useState(0);
   const [cameraPageMeta, setCameraPageMeta] = useState({});
+  const [fleetSection, setFleetSection] = useState("aiboxes");
+  const [fleetAiboxPage, setFleetAiboxPage] = useState(0);
+  const [fleetNetworkId, setFleetNetworkId] = useState("");
+  const [fleetCameraPage, setFleetCameraPage] = useState(0);
   const aiboxDirectionRef = useRef(1);
   const resizeResumeTimerRef = useRef(0);
+  const dialogRef = useRef(null);
+  const dialogOpenerRef = useRef(null);
   const dashboardWorkspaceRef = useRef(null);
   const aiboxPanelRef = useRef(null);
   const networkOverviewRef = useRef(null);
@@ -624,6 +644,10 @@ function App() {
   const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const mobileDashboard = useMediaQuery("(max-width: 760px)");
   const tabletDashboard = useMediaQuery("(max-width: 1100px)");
+  const desktopFleet = useMediaQuery("(min-width: 901px) and (min-height: 621px)");
+  const wideFleet = useMediaQuery("(min-width: 1400px)");
+  const mediumFleet = useMediaQuery("(min-width: 1200px)");
+  const lowHeightFleet = useMediaQuery("(max-height: 760px)");
 
   const aiboxes = data.aiboxes ?? [];
   const cameraNetworks = data.networks ?? [];
@@ -717,6 +741,21 @@ function App() {
   }, [aiboxes, query, statusFilter]);
   const dashboardAiboxes = useMemo(() => applySavedOrder(filteredAiboxes, layout.aiboxOrder, (box) => box.ip), [filteredAiboxes, layout.aiboxOrder]);
   const fleetAiboxes = useMemo(() => applySavedOrder(filteredAiboxes, layout.aiboxOrder, (box) => box.ip), [filteredAiboxes, layout.aiboxOrder]);
+  const fleetAiboxPageSize = wideFleet ? 8 : mediumFleet ? 6 : 4;
+  const fleetAiboxPageCount = Math.max(1, Math.ceil(fleetAiboxes.length / fleetAiboxPageSize));
+  const safeFleetAiboxPage = clamp(fleetAiboxPage, 0, fleetAiboxPageCount - 1);
+  const visibleFleetAiboxes = desktopFleet
+    ? fleetAiboxes.slice(safeFleetAiboxPage * fleetAiboxPageSize, (safeFleetAiboxPage + 1) * fleetAiboxPageSize)
+    : fleetAiboxes;
+  const selectedFleetNetwork = orderedCameraNetworks.find((network) => network.id === fleetNetworkId) || orderedCameraNetworks[0] || null;
+  const fleetCameraPageSize = lowHeightFleet
+    ? wideFleet ? 12 : mediumFleet ? 8 : 6
+    : wideFleet ? 24 : mediumFleet ? 16 : 12;
+  const fleetCameraPageCount = Math.max(1, Math.ceil((selectedFleetNetwork?.cameras.length || 0) / fleetCameraPageSize));
+  const safeFleetCameraPage = clamp(fleetCameraPage, 0, fleetCameraPageCount - 1);
+  const visibleFleetCameras = desktopFleet
+    ? (selectedFleetNetwork?.cameras || []).slice(safeFleetCameraPage * fleetCameraPageSize, (safeFleetCameraPage + 1) * fleetCameraPageSize)
+    : [];
   const safeAiboxPage = clamp(aiboxPage, 0, Math.max(0, aiboxPageMeta.count - 1));
   const canDragAiboxes = manageMode && activeView === "fleet" && statusFilter === "all" && loaded;
   const activeNetworkGroups = useMemo(() => chunkItems(dashboardNetworks, Math.max(1, networkPageMeta.capacity || 1)), [dashboardNetworks, networkPageMeta.capacity]);
@@ -828,7 +867,28 @@ function App() {
     setAiboxPage(0);
     setNetworkGroupPage(0);
     setCameraStep(0);
+    setFleetAiboxPage(0);
   }, [dashboardFocuses, query, statusFilter]);
+
+  useEffect(() => {
+    setFleetAiboxPage((page) => clamp(page, 0, fleetAiboxPageCount - 1));
+  }, [fleetAiboxPageCount]);
+
+  useEffect(() => {
+    if (!orderedCameraNetworks.length) {
+      setFleetNetworkId("");
+      return;
+    }
+    if (!orderedCameraNetworks.some((network) => network.id === fleetNetworkId)) setFleetNetworkId(orderedCameraNetworks[0].id);
+  }, [fleetNetworkId, orderedCameraNetworks]);
+
+  useEffect(() => {
+    setFleetCameraPage(0);
+  }, [fleetNetworkId]);
+
+  useEffect(() => {
+    setFleetCameraPage((page) => clamp(page, 0, fleetCameraPageCount - 1));
+  }, [fleetCameraPageCount]);
 
   useEffect(() => {
     setAiboxPage((page) => clamp(page, 0, Math.max(0, aiboxPageMeta.count - 1)));
@@ -900,14 +960,36 @@ function App() {
 
   useEffect(() => {
     if (!activeNote && !activeConfig) return undefined;
-    function closeOnEscape(event) {
+    const dialog = dialogRef.current;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.requestAnimationFrame(() => dialog?.querySelector("button, input, select, textarea")?.focus());
+    function containDialogFocus(event) {
       if (event.key === "Escape") {
+        event.preventDefault();
         closeNote();
         closeConfig();
+        return;
+      }
+      if (event.key !== "Tab" || !dialog) return;
+      const focusable = [...dialog.querySelectorAll("button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [href], [tabindex]:not([tabindex='-1'])")]
+        .filter((element) => element.getClientRects().length);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
       }
     }
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
+    window.addEventListener("keydown", containDialogFocus);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", containDialogFocus);
+    };
   }, [activeNote, activeConfig]);
 
   useEffect(() => {
@@ -977,6 +1059,7 @@ function App() {
       closeNote();
       return;
     }
+    dialogOpenerRef.current = document.activeElement;
     setActiveNote({ ...target, mode });
     setNoteForms((current) => ({ ...current, [target.key]: current[target.key] || emptyNoteForm() }));
   }
@@ -997,11 +1080,13 @@ function App() {
 
   function closeNote() {
     setActiveNote(null);
+    window.requestAnimationFrame(() => dialogOpenerRef.current?.focus());
   }
 
   function closeConfig() {
     setActiveConfig(null);
     setConfigConfirm(null);
+    window.requestAnimationFrame(() => dialogOpenerRef.current?.focus());
   }
 
   function focusDashboard(target) {
@@ -1198,6 +1283,7 @@ function App() {
   }
 
   function openConfig(tab = "aiboxes") {
+    dialogOpenerRef.current = document.activeElement;
     setActiveConfig({ tab });
     setConfigMessage("");
     loadConfig();
@@ -1374,7 +1460,7 @@ function App() {
     return (
       <div className="noteDrawerWrap" role="presentation">
         <button className="noteBackdrop" aria-label="Close notes" onClick={closeNote} type="button" />
-        <aside className="noteDrawer noteDrawer--notes" id="note-drawer" role="dialog" aria-modal="true" aria-labelledby="note-drawer-title" aria-describedby="note-drawer-subtitle">
+        <aside className="noteDrawer noteDrawer--notes" id="note-drawer" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="note-drawer-title" aria-describedby="note-drawer-subtitle">
           <div className="noteHero">
             <div>
               <span className="noteKicker">Notes for</span>
@@ -1390,9 +1476,9 @@ function App() {
             <span>Newest first</span>
           </div>
 
-          <div className="noteTabs" role="tablist" aria-label="Note actions">
-            <button aria-selected={activeNote.mode === "list"} className={`noteTab ${activeNote.mode === "list" ? "active" : ""}`} onClick={() => setActiveNote({ ...target, mode: "list" })} role="tab" type="button">Notes</button>
-            <button aria-selected={activeNote.mode === "add"} className={`noteTab ${activeNote.mode === "add" ? "active" : ""}`} onClick={() => setActiveNote({ ...target, mode: "add" })} role="tab" type="button">New note</button>
+          <div className="noteTabs" aria-label="Note actions">
+            <button aria-pressed={activeNote.mode === "list"} className={`noteTab ${activeNote.mode === "list" ? "active" : ""}`} onClick={() => setActiveNote({ ...target, mode: "list" })} type="button">Notes</button>
+            <button aria-pressed={activeNote.mode === "add"} className={`noteTab ${activeNote.mode === "add" ? "active" : ""}`} onClick={() => setActiveNote({ ...target, mode: "add" })} type="button">New note</button>
           </div>
 
           {activeNote.mode === "add" ? (
@@ -1456,7 +1542,7 @@ function App() {
     return (
       <div className="noteDrawerWrap" role="presentation">
         <button className="noteBackdrop" aria-label="Close config tools" onClick={closeConfig} type="button" />
-        <aside className="noteDrawer configDrawer" id="config-drawer" role="dialog" aria-modal="true" aria-labelledby="config-drawer-title">
+        <aside className="noteDrawer configDrawer" id="config-drawer" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="config-drawer-title">
           <div className="noteDrawerHeader">
             <div>
               <strong id="config-drawer-title">Configuration tools</strong>
@@ -1465,14 +1551,15 @@ function App() {
             <button className="btn btn-sm btn-outline-secondary rounded-pill" onClick={closeConfig} type="button">Close</button>
           </div>
 
-          <div className="noteTabs" role="tablist" aria-label="Config sections">
-            <button aria-selected={activeConfig.tab === "aiboxes"} className={`noteTab ${activeConfig.tab === "aiboxes" ? "active" : ""}`} onClick={() => setActiveConfig({ tab: "aiboxes" })} role="tab" type="button">AIBOXes</button>
-            <button aria-selected={activeConfig.tab === "cameras"} className={`noteTab ${activeConfig.tab === "cameras" ? "active" : ""}`} onClick={() => setActiveConfig({ tab: "cameras" })} role="tab" type="button">Cameras</button>
+          <div className="noteTabs" aria-label="Config sections">
+            <button aria-pressed={activeConfig.tab === "aiboxes"} className={`noteTab ${activeConfig.tab === "aiboxes" ? "active" : ""}`} onClick={() => setActiveConfig({ tab: "aiboxes" })} type="button">AIBOXes</button>
+            <button aria-pressed={activeConfig.tab === "cameras"} className={`noteTab ${activeConfig.tab === "cameras" ? "active" : ""}`} onClick={() => setActiveConfig({ tab: "cameras" })} type="button">Cameras</button>
           </div>
 
           <div className="noteDrawerBody configBody">
             <div className="configAdminRow">
-              <input className="form-control noteInput" onChange={(event) => setAdminToken(event.target.value)} placeholder="Admin token if enabled" type="password" value={adminToken} />
+              <label className="visually-hidden" htmlFor="config-admin-token">Admin token</label>
+              <input className="form-control noteInput" id="config-admin-token" onChange={(event) => setAdminToken(event.target.value)} placeholder="Admin token if enabled" type="password" value={adminToken} />
               <button className="btn btn-outline-primary rounded-pill" onClick={() => { window.sessionStorage.setItem("aiboxAdminToken", adminToken); loadConfig(); }} type="button">Unlock</button>
             </div>
             {configError ? <div className="alert alert-warning rounded-4">{configError}</div> : null}
@@ -1696,173 +1783,139 @@ function App() {
             </div>
           </div>
         ) : (
-          <div className="container-xxl py-4 py-md-5 fleetDetailView">
-            <section className="hero controlDeck mb-4">
+          <div className={`container-xxl fleetDetailView ${desktopFleet ? "desktopFleet" : "flowFleet"}`}>
+            <section className="hero controlDeck fleetCommandBand">
               <div className="heroCopy">
-                <p className="eyebrow">Fleet detail</p>
-                <h1>Fleet operations</h1>
-                <p className="subtitle">Inspect current outages, device history, and operator handoffs.</p>
+                <p className="eyebrow">Fleet operations</p>
+                <h1>Control room</h1>
+                <p className="subtitle">Inspect outages, camera health, and operator handoffs without leaving the workspace.</p>
               </div>
+              {desktopFleet ? (
+                <div className="fleetViewSwitch" aria-label="Fleet workspaces">
+                  <button aria-pressed={fleetSection === "aiboxes"} className={fleetSection === "aiboxes" ? "active" : ""} onClick={() => setFleetSection("aiboxes")} type="button"><strong>{aiboxes.length}</strong><span>AIBOXes</span></button>
+                  <button aria-pressed={fleetSection === "cameras"} className={fleetSection === "cameras" ? "active" : ""} onClick={() => setFleetSection("cameras")} type="button"><strong>{cameraCount}</strong><span>Cameras</span></button>
+                  <button aria-pressed={fleetSection === "notes"} className={fleetSection === "notes" ? "active" : ""} onClick={() => setFleetSection("notes")} type="button"><strong>{recentNotes.length}</strong><span>Notes</span></button>
+                </div>
+              ) : null}
               <div className="heroControls">
-                <button className="heroAction primary" onClick={() => { setManageMode((value) => !value); if (!manageMode) loadConfig(); }} type="button">
-                  {manageMode ? "Finish managing" : "Manage fleet"}
-                </button>
+                <button className="heroAction primary" onClick={() => { setManageMode((value) => !value); if (!manageMode) loadConfig(); }} type="button">{manageMode ? "Finish managing" : "Manage fleet"}</button>
                 <button className="heroAction secondary" onClick={() => { setActiveView("dashboard"); focusDashboard("all"); }} type="button">Operations overview</button>
               </div>
             </section>
 
-        <section className="summaryGrid mb-4" aria-label="Status summary">
-          <Stat label="Offline" value={offline} tone="bad" active={statusFilter === "offline"} onClick={() => setStatusFilter(statusFilter === "offline" ? "all" : "offline")} />
-          <Stat label="Online" value={online} tone="good" active={statusFilter === "online"} onClick={() => setStatusFilter(statusFilter === "online" ? "all" : "online")} />
-          <Stat label="Unknown" value={unknown} tone="muted" active={statusFilter === "unknown"} onClick={() => setStatusFilter(statusFilter === "unknown" ? "all" : "unknown")} />
-          <Stat label="Total AIBOXes" value={aiboxes.length} active={statusFilter === "all"} onClick={() => setStatusFilter("all")} />
-          <Stat label="Networks" value={networks || cameraNetworks.length} />
-          <Stat label="Cameras" value={cameraCount} />
-        </section>
+            <section className="summaryGrid" aria-label="Status summary">
+              <Stat label="Offline" value={offline} tone="bad" active={statusFilter === "offline"} onClick={() => { setFleetSection("aiboxes"); setStatusFilter(statusFilter === "offline" ? "all" : "offline"); }} />
+              <Stat label="Online" value={online} tone="good" active={statusFilter === "online"} onClick={() => { setFleetSection("aiboxes"); setStatusFilter(statusFilter === "online" ? "all" : "online"); }} />
+              <Stat label="Unknown" value={unknown} tone="muted" active={statusFilter === "unknown"} onClick={() => { setFleetSection("aiboxes"); setStatusFilter(statusFilter === "unknown" ? "all" : "unknown"); }} />
+              <Stat label="Total AIBOXes" value={aiboxes.length} active={statusFilter === "all"} onClick={() => { setFleetSection("aiboxes"); setStatusFilter("all"); }} />
+              <Stat label="Networks" value={networks || cameraNetworks.length} />
+              <Stat label="Cameras" value={cameraCount} />
+            </section>
 
-        <section className="recentPanel panel card border-0 rounded-5 mb-4">
-          <div className="card-body p-3 p-md-4">
-            <div className="sectionHeader">
-              <div>
-                <h2 className="mb-0">Recent notes</h2>
-                <p className="sectionMeta mb-0">Newest shared comments across fleet and networks</p>
-              </div>
-              <span className="networkCount">{recentNotes.length} shown</span>
-            </div>
-            {recentNotes.length ? (
-              <div className="recentNoteGrid">
-                {recentNotes.map((note) => (
-                  <button className="recentNote" key={`${note.key}-${note.id}`} onClick={() => openNoteTargetByKey(note.key)} type="button">
-                    <span>{noteTargetLabel(note.key, targetLookup)}</span>
-                    <strong>{note.content}</strong>
-                    <small>{note.creator} · {formatGeneratedAt(note.createdAt)}</small>
-                  </button>
-                ))}
-              </div>
-            ) : <div className="emptyState compact">No shared notes yet.</div>}
-          </div>
-        </section>
-
-        <section className="panel card border-0 rounded-5 mb-4" id="fleet-section">
-          <div className="card-body p-3 p-md-4">
-            <div className="sectionHeader">
-              <div>
-                <h2 className="mb-0">Fleet</h2>
-                <p className="sectionMeta mb-0">{filteredAiboxes.length} of {aiboxes.length} configured AIBOXes{canDragAiboxes ? " · Drag cards to reorder" : " · Select a status to filter"}</p>
-              </div>
-              <div className="fleetTools">
-                {manageMode ? <button className="btn btn-primary rounded-pill" onClick={() => openConfig("aiboxes")} type="button">Add/edit AIBOX</button> : null}
-                <input aria-label="Search AIBOXes" className="form-control searchInput" onChange={(event) => setQuery(event.target.value)} placeholder="Search name, IP, network" type="search" value={query} />
-              </div>
-            </div>
-            <div className="filterRow" aria-label="Status filters">
-              {STATUS_FILTERS.map((filter) => (
-                <button aria-pressed={statusFilter === filter} className={`filterChip ${statusFilter === filter ? "active" : ""}`} key={filter} onClick={() => setStatusFilter(filter)} type="button">
-                  {filter === "all" ? "All" : statusLabel(filter)}
-                </button>
-              ))}
-            </div>
-            {!loaded ? <div className="aiboxGrid">{renderSkeletons()}</div> : fleetAiboxes.length ? (
-              <div className="aiboxGrid">
-                {fleetAiboxes.map((box) => {
-                  const target = { key: noteKey("aibox", box.ip), fallbackKey: box.ip, title: box.name, subtitle: box.ip };
-                  const noteList = getNotes(target);
-                  return (
-                    <div
-                      className={`aiboxShell ${draggedAiboxIp === box.ip ? "dragging" : ""} ${dragInsert.ip === box.ip ? `dragOver insert-${dragInsert.position}` : ""}`}
-                      draggable={canDragAiboxes}
-                      key={box.ip}
-                      onDragEnd={handleAiboxDragEnd}
-                      onDragOver={(event) => handleAiboxDragOver(event, box.ip, "y")}
-                      onDragStart={(event) => handleAiboxDragStart(event, box.ip)}
-                      onDrop={(event) => handleAiboxDrop(event, box.ip)}
-                    >
-                      <article className={`aiboxPill ${box.status}`}>
-                        <div className="aiboxPillTop">
-                          {canDragAiboxes ? <span className="dragHandle" title="Drag to reorder" aria-hidden="true">⋮⋮</span> : null}
-                           <StatusSymbol status={box.status} />
-                          <div className="aiboxTitleBlock">
-                            <strong>{box.name}</strong>
-                            <span className="mono">{box.ip}</span>
-                          </div>
-                          {renderStatusPill(box)}
-                        </div>
-                        <div className="aiboxMeta">
-                          <span>{box.networks.length ? box.networks.join(", ") : "No network"}</span>
-                          <span className="availabilityBadge">Availability {formatAvailability(box.availability)}</span>
-                          {noteList.length ? <span className="noteBadge insidePill">{noteList.length} notes</span> : null}
-                          {renderNoteControls(target, noteList)}
-                        </div>
-                        <p title={box.monitors.length ? box.monitors.join(", ") : "No monitors configured"}>{box.monitors.length ? box.monitors.join(", ") : "No monitors configured"}</p>
-                      </article>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : <div className="emptyState">No AIBOX matches the current filter.</div>}
-          </div>
-        </section>
-
-        <section className="panel card border-0 rounded-5">
-          <div className="card-body p-3 p-md-4">
-            <div className="sectionHeader">
-              <div>
-                <h2 className="mb-0">Cameras by network</h2>
-                <p className="sectionMeta mb-0">{cameraCount} configured cameras{manageMode ? " · Drag cameras within each network" : " · Grouped by monitored network"}</p>
-              </div>
-              {manageMode ? <button className="btn btn-primary rounded-pill" onClick={() => openConfig("cameras")} type="button">Add/edit cameras</button> : null}
-            </div>
-            {!loaded ? <div className="d-grid gap-3">{renderSkeletons()}</div> : orderedCameraNetworks.length ? (
-              <div className="d-grid gap-3">
-                {orderedCameraNetworks.map((network) => {
-                  const target = { key: noteKey("network", network.id), title: network.name, subtitle: network.id };
-                  const noteList = getNotes(target);
-                  const cameraSummary = network.cameras.reduce((summary, camera) => ({ ...summary, [camera.status]: (summary[camera.status] || 0) + 1 }), {});
-                  const hasProblem = (cameraSummary.offline || 0) + (cameraSummary.unknown || 0) > 0;
-                  return (
-                    <article className={`networkCard ${hasProblem ? "hasProblem" : ""}`} key={network.id}>
-                      <div className="networkHead">
-                        <div className="min-w-0">
-                          <div className="networkTitleLine">
-                            <h3>{network.name}</h3>
-                            {noteList.length ? <span className="noteBadge insideNetwork">{noteList.length} notes</span> : null}
-                          </div>
-                          <p className="mono">{network.id}</p>
-                        </div>
-                        <div className="cameraSummary" aria-label="Camera status summary">
-                          <span className="miniStatus good">{cameraSummary.online || 0} on</span>
-                          <span className="miniStatus bad">{cameraSummary.offline || 0} off</span>
-                          <span className="miniStatus muted">{cameraSummary.unknown || 0} unk</span>
-                          <span className="miniStatus total">{network.cameras.length} total</span>
-                        </div>
+            <div className="fleetWorkspace">
+              {(!desktopFleet || fleetSection === "aiboxes") ? (
+                <section className="fleetWorkspacePanel panel card border-0" id="fleet-section">
+                  <div className="card-body">
+                    <div className="sectionHeader fleetSectionHeader">
+                      <div>
+                        <h2 className="mb-0">AIBOX fleet</h2>
+                        <p className="sectionMeta mb-0">{filteredAiboxes.length} of {aiboxes.length} configured{canDragAiboxes ? " · Drag to reorder" : " · Current connectivity and availability"}</p>
                       </div>
-                      <div className="networkMeta"><span title={network.monitors.length ? network.monitors.join(", ") : "-"}>Monitored by: {network.monitors.length ? network.monitors.join(", ") : "-"}</span>{renderNoteControls(target, noteList)}</div>
-                      <div className="cameraGrid">
-                        {network.cameras.map((camera) => (
-                          <div
-                            className={`cameraCard ${camera.status} ${draggedCamera.networkId === network.id && draggedCamera.ip === camera.ip ? "dragging" : ""} ${cameraInsert.networkId === network.id && cameraInsert.ip === camera.ip ? `dragOver insert-${cameraInsert.position}` : ""}`}
-                            draggable={manageMode && loaded}
-                            key={`${network.id}-${camera.ip}`}
-                            onDragEnd={handleCameraDragEnd}
-                            onDragOver={(event) => handleCameraDragOver(event, network.id, camera.ip, "x")}
-                            onDragStart={(event) => handleCameraDragStart(event, network.id, camera.ip)}
-                            onDrop={(event) => handleCameraDrop(event, network.id, camera.ip)}
-                          >
-                            <div className="cameraTop">
-                              <strong>{camera.name}</strong>
-                              {renderStatusPill(camera)}
-                            </div>
-                            <div className="cameraMeta"><span className="mono">{camera.ip}</span><span className="availabilityBadge cameraAvailability">{formatAvailability(camera.availability)}</span></div>
-                          </div>
+                      <div className="fleetTools">
+                        {manageMode ? <button className="btn btn-primary" onClick={() => openConfig("aiboxes")} type="button">Add/edit AIBOX</button> : null}
+                        <input aria-label="Search AIBOXes" className="form-control searchInput" onChange={(event) => setQuery(event.target.value)} placeholder="Search name, IP, network" type="search" value={query} />
+                      </div>
+                    </div>
+                    <div className="fleetControlRow">
+                      <div className="filterRow" role="group" aria-label="Status filters">
+                        {STATUS_FILTERS.map((filter) => (
+                          <button aria-pressed={statusFilter === filter} className={`filterChip ${statusFilter === filter ? "active" : ""}`} key={filter} onClick={() => setStatusFilter(filter)} type="button">{filter === "all" ? "All" : statusLabel(filter)}</button>
                         ))}
                       </div>
-                    </article>
-                  );
-                })}
-              </div>
-            ) : <div className="emptyState">No camera networks configured.</div>}
-          </div>
-        </section>
+                      {desktopFleet ? <FleetPager label="AIBOX" page={safeFleetAiboxPage} pageCount={fleetAiboxPageCount} pageSize={fleetAiboxPageSize} total={fleetAiboxes.length} onPage={setFleetAiboxPage} /> : null}
+                    </div>
+                    {!loaded ? <div className="aiboxGrid fleetPagedGrid">{renderSkeletons()}</div> : fleetAiboxes.length ? (
+                      <div className="aiboxGrid fleetPagedGrid">
+                        {visibleFleetAiboxes.map((box) => {
+                          const target = { key: noteKey("aibox", box.ip), fallbackKey: box.ip, title: box.name, subtitle: box.ip };
+                          const noteList = getNotes(target);
+                          return (
+                            <div className={`aiboxShell ${draggedAiboxIp === box.ip ? "dragging" : ""} ${dragInsert.ip === box.ip ? `dragOver insert-${dragInsert.position}` : ""}`} draggable={canDragAiboxes} key={box.ip} onDragEnd={handleAiboxDragEnd} onDragOver={(event) => handleAiboxDragOver(event, box.ip, "y")} onDragStart={(event) => handleAiboxDragStart(event, box.ip)} onDrop={(event) => handleAiboxDrop(event, box.ip)}>
+                              <article className={`aiboxPill ${box.status}`}>
+                                <div className="aiboxPillTop">
+                                  {canDragAiboxes ? <span className="dragHandle" title="Drag to reorder" aria-hidden="true">⋮⋮</span> : null}
+                                  <StatusSymbol status={box.status} />
+                                  <div className="aiboxTitleBlock"><strong>{box.name}</strong><span className="mono">{box.ip}</span></div>
+                                  {renderStatusPill(box)}
+                                </div>
+                                <div className="aiboxMeta"><span>{box.networks.length ? box.networks.join(", ") : "No network"}</span><span className="availabilityBadge">Availability {formatAvailability(box.availability)}</span>{noteList.length ? <span className="noteBadge insidePill">{noteList.length} notes</span> : null}{renderNoteControls(target, noteList)}</div>
+                                <p title={box.monitors.length ? box.monitors.join(", ") : "No monitors configured"}>{box.monitors.length ? box.monitors.join(", ") : "No monitors configured"}</p>
+                              </article>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : <div className="emptyState">No AIBOX matches the current filter.</div>}
+                  </div>
+                </section>
+              ) : null}
+
+              {(!desktopFleet || fleetSection === "cameras") ? (
+                <section className="fleetWorkspacePanel panel card border-0" id="fleet-camera-section">
+                  <div className="card-body">
+                    <div className="sectionHeader fleetSectionHeader">
+                      <div><h2 className="mb-0">Cameras by network</h2><p className="sectionMeta mb-0">{cameraCount} cameras · Select a network to inspect current state</p></div>
+                      {manageMode ? <button className="btn btn-primary" onClick={() => openConfig("cameras")} type="button">Add/edit cameras</button> : null}
+                    </div>
+                    {desktopFleet && orderedCameraNetworks.length ? (
+                      <div className="fleetNetworkSelector" role="group" aria-label="Camera networks">
+                        {orderedCameraNetworks.map((network) => {
+                          const affected = network.cameras.filter((camera) => camera.status !== "online").length;
+                          return <button aria-pressed={selectedFleetNetwork?.id === network.id} className={selectedFleetNetwork?.id === network.id ? "active" : ""} key={network.id} onClick={() => setFleetNetworkId(network.id)} type="button"><strong>{compactDeviceName(network.name)}</strong><span>{affected ? `${affected} affected` : "All reporting"}</span><b>{network.cameras.length}</b></button>;
+                        })}
+                      </div>
+                    ) : null}
+                    {!loaded ? <div className="d-grid gap-3">{renderSkeletons()}</div> : orderedCameraNetworks.length ? (
+                      <div className="fleetNetworkStage">
+                        {(desktopFleet ? [selectedFleetNetwork].filter(Boolean) : orderedCameraNetworks).map((network) => {
+                          const target = { key: noteKey("network", network.id), title: network.name, subtitle: network.id };
+                          const noteList = getNotes(target);
+                          const cameraSummary = network.cameras.reduce((summary, camera) => ({ ...summary, [camera.status]: (summary[camera.status] || 0) + 1 }), {});
+                          const hasProblem = (cameraSummary.offline || 0) + (cameraSummary.unknown || 0) > 0;
+                          const camerasToRender = desktopFleet ? visibleFleetCameras : network.cameras;
+                          return (
+                            <article className={`networkCard ${hasProblem ? "hasProblem" : ""}`} key={network.id}>
+                              <div className="networkHead">
+                                <div className="min-w-0"><div className="networkTitleLine"><h3>{network.name}</h3>{noteList.length ? <span className="noteBadge insideNetwork">{noteList.length} notes</span> : null}</div><p className="mono">{network.id}</p></div>
+                                <div className="cameraSummary" aria-label="Camera status summary"><span className="miniStatus good">{cameraSummary.online || 0} on</span><span className="miniStatus bad">{cameraSummary.offline || 0} off</span><span className="miniStatus muted">{cameraSummary.unknown || 0} unk</span><span className="miniStatus total">{network.cameras.length} total</span></div>
+                              </div>
+                              <div className="networkMeta"><span title={network.monitors.length ? network.monitors.join(", ") : "-"}>Monitored by: {network.monitors.length ? network.monitors.join(", ") : "-"}</span>{desktopFleet ? <div className="networkMetaActions"><FleetPager label="camera" page={safeFleetCameraPage} pageCount={fleetCameraPageCount} pageSize={fleetCameraPageSize} total={network.cameras.length} onPage={setFleetCameraPage} />{renderNoteControls(target, noteList)}</div> : renderNoteControls(target, noteList)}</div>
+                              <div className="cameraGrid fleetCameraPagedGrid" style={{ "--fleet-camera-rows": lowHeightFleet ? 2 : 4 }}>
+                                {camerasToRender.map((camera) => (
+                                  <div aria-label={`${camera.name}, IP ${camera.ip}, ${statusLabel(camera.status)}, availability ${formatAvailability(camera.availability)}`} className={`cameraCard ${camera.status} ${draggedCamera.networkId === network.id && draggedCamera.ip === camera.ip ? "dragging" : ""} ${cameraInsert.networkId === network.id && cameraInsert.ip === camera.ip ? `dragOver insert-${cameraInsert.position}` : ""}`} draggable={manageMode && loaded} key={`${network.id}-${camera.ip}`} onDragEnd={handleCameraDragEnd} onDragOver={(event) => handleCameraDragOver(event, network.id, camera.ip, "x")} onDragStart={(event) => handleCameraDragStart(event, network.id, camera.ip)} onDrop={(event) => handleCameraDrop(event, network.id, camera.ip)} title={`${camera.name} · ${camera.ip} · ${formatAvailability(camera.availability)}`}>
+                                    <div className="cameraTop"><strong>{camera.name}</strong>{renderStatusPill(camera)}</div>
+                                    <div className="cameraMeta"><span className="mono">{camera.ip}</span><span className="availabilityBadge cameraAvailability">{formatAvailability(camera.availability)}</span></div>
+                                  </div>
+                                ))}
+                              </div>
+                            </article>
+                          );
+                        })}
+                      </div>
+                    ) : <div className="emptyState">No camera networks configured.</div>}
+                  </div>
+                </section>
+              ) : null}
+
+              {(!desktopFleet || fleetSection === "notes") ? (
+                <section className="fleetWorkspacePanel recentPanel panel card border-0">
+                  <div className="card-body">
+                    <div className="sectionHeader"><div><h2 className="mb-0">Recent notes</h2><p className="sectionMeta mb-0">Newest operator comments across fleet and networks</p></div><span className="networkCount">{recentNotes.length} shown</span></div>
+                    {recentNotes.length ? <div className="recentNoteGrid">{recentNotes.map((note) => <button className="recentNote" key={`${note.key}-${note.id}`} onClick={() => openNoteTargetByKey(note.key)} type="button"><span>{noteTargetLabel(note.key, targetLookup)}</span><strong>{note.content}</strong><small>{note.creator} · {formatGeneratedAt(note.createdAt)}</small></button>)}</div> : <div className="emptyState compact">No shared notes yet.</div>}
+                  </div>
+                </section>
+              ) : null}
+            </div>
           </div>
         )}
       </div>
