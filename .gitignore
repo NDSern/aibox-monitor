@@ -1,0 +1,7 @@
+node_modules/
+dist/
+data/
+public/aibox-data.json
+src/aibox-data.json
+__pycache__/
+*.log
