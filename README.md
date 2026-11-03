@@ -24,3 +24,9 @@ Override monitor source path:
 ```sh
 AIBOX_MONITOR_ROOT=/path/to/aibox-monitor npm run sync:data
 ```
+
+## Connectivity history
+
+Optional per-link LAN/USB telemetry from enrolled AIBOX devices, collected on
+boxtest2 and proxied same-origin under `/api/connectivity/*`.
+See [docs/connectivity-integration.md](docs/connectivity-integration.md).

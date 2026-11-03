@@ -5,3 +5,4 @@ public/aibox-data.json
 src/aibox-data.json
 __pycache__/
 *.log
+scripts/*.before-*

@@ -9,7 +9,6 @@ const dataDir = path.join(__dirname, "..", "data");
 const historyPath = path.join(dataDir, "status-history.json");
 const notifyStatePath = path.join(dataDir, "aibox-notify-state.json");
 const availabilityPath = path.join(dataDir, "availability-history.json");
-const outPath = path.join(__dirname, "..", "src", "aibox-data.json");
 const publicPath = path.join(__dirname, "..", "public", "aibox-data.json");
 const distPath = path.join(__dirname, "..", "dist", "aibox-data.json");
 const tailBytes = 1024 * 1024 * 2;
@@ -20,7 +19,6 @@ const ntfyToken = process.env.AIBOX_WEBAPP_NTFY_TOKEN || "";
 const notifyDryRun = process.env.AIBOX_WEBAPP_NOTIFY_DRY_RUN === "1";
 const availabilityWindowMs = 7 * 24 * 60 * 60 * 1000;
 const availabilityRetentionMs = 8 * 24 * 60 * 60 * 1000;
-const availabilityMinimumObservedMs = 24 * 60 * 60 * 1000;
 
 function isValidTime(value) {
   if (!value || /^0001-01-01/.test(value)) return false;
@@ -150,12 +148,12 @@ function backfillAvailability(store, networks) {
   const logText = readLog(logPath, null);
   const journalText = readJournalLines(store);
   const text = `${logText}\n${journalText}`;
-  for (const line of text.split("\n")) {
-    const aiboxEvent = parseAiboxStatusLine(line);
-    if (aiboxEvent) addAvailabilityEvent(store, "aiboxes", aiboxEvent.ip, aiboxEvent.status, aiboxEvent.at);
-    const targetEvent = parseTargetStatusLine(line);
-    const key = targetEvent ? targetStatusKey(targetEvent, scopeIds) : null;
-    if (key) addAvailabilityEvent(store, "targets", key, targetEvent.status, targetEvent.at);
+      for (const line of text.split("\n")) {
+        const aiboxEvent = parseAiboxStatusLine(line);
+        if (aiboxEvent) addAvailabilityEvent(store, "aiboxes", aiboxEvent.ip, aiboxEvent.status, aiboxEvent.at);
+        const targetEvent = parseTargetStatusLine(line);
+        const key = targetEvent ? targetStatusKey(targetEvent, scopeIds) : null;
+        if (key && targetEvent.status !== "unknown") addAvailabilityEvent(store, "targets", key, targetEvent.status, targetEvent.at);
   }
   store.backfilledAt = new Date().toISOString();
   store.backfillSources = [logText ? "log" : null, journalText ? "journal" : null].filter(Boolean);
@@ -199,11 +197,13 @@ function updateAvailabilityEntry(entry, status, statusSince, generatedAt, nowMs)
   next.events = pruneAvailabilityEvents(next.events, nowMs);
   const eventAt = parseExternalTime(statusSince) || generatedAt;
   const lastEvent = next.events[next.events.length - 1];
-  const appendAt = lastEvent && new Date(eventAt).getTime() <= new Date(lastEvent.at).getTime() ? generatedAt : eventAt;
+  const conflicts = lastEvent && new Date(eventAt).getTime() < new Date(lastEvent.at).getTime();
+  const observedAt = next.lastStatus === status && isValidTime(next.lastChangedAt) ? next.lastChangedAt : generatedAt;
+  const appendAt = conflicts ? (new Date(observedAt).getTime() > new Date(lastEvent.at).getTime() ? observedAt : generatedAt) : eventAt;
+  if (conflicts) next.timestampConflict = { statusSince: eventAt, observedAt: appendAt };
   if (!lastEvent || lastEvent.status !== status) next.events.push({ status, at: appendAt });
-  else if (new Date(eventAt).getTime() < new Date(lastEvent.at).getTime()) lastEvent.at = eventAt;
   next.lastStatus = status;
-  next.lastChangedAt = appendAt;
+  next.lastChangedAt = next.events[next.events.length - 1].at;
   next.events = pruneAvailabilityEvents(next.events, nowMs);
   return next;
 }
@@ -253,7 +253,10 @@ function applyAvailability(payload, generatedAt) {
   for (const box of payload.aiboxes) {
     store.aiboxes[box.ip] = updateAvailabilityEntry(store.aiboxes[box.ip], box.status, box.statusSince, generatedAt, nowMs);
     const availability = calculateAvailability(store.aiboxes[box.ip], nowMs);
-    if (availability !== null && availability.observedMs >= availabilityMinimumObservedMs) box.availability = availability.percent;
+    if (availability !== null) {
+      box.availability = availability.percent;
+      box.availabilityObservedMs = availability.observedMs;
+    }
   }
   for (const ip of Object.keys(store.aiboxes)) {
     if (!activeAiboxIps.has(ip)) delete store.aiboxes[ip];
@@ -271,7 +274,10 @@ function applyAvailability(payload, generatedAt) {
       const existing = store.targets[key] || store.targets[camera.ip];
       store.targets[key] = updateAvailabilityEntry(existing, camera.status, camera.statusSince, generatedAt, nowMs);
       const availability = calculateAvailability(store.targets[key], nowMs);
-      if (availability !== null && availability.observedMs >= availabilityMinimumObservedMs) camera.availability = availability.percent;
+      if (availability !== null) {
+        camera.availability = availability.percent;
+        camera.availabilityObservedMs = availability.observedMs;
+      }
     }
   }
   for (const key of Object.keys(store.targets || {})) {
@@ -285,6 +291,7 @@ function applyAvailability(payload, generatedAt) {
   }
   store.updatedAt = generatedAt;
   writeJsonAtomic(availabilityPath, store);
+  return store;
 }
 
 function readLogTail(filePath, maxBytes) {
@@ -328,6 +335,30 @@ function updateStatus(statuses, ip, status, timestamp, resetSince) {
   if (!current.statusSince && timestamp) current.statusSince = timestamp;
 }
 
+const CAMERA_LAG_MINIMUM = 5;
+
+function updateTargetStatus(statuses, ip, event) {
+  const current = statuses[ip];
+  if (event.status === "unknown") {
+    statuses[ip] = { ...(current || {}), status: "unknown", method: "unknown" };
+    return;
+  }
+  const reset = event.reset || !current || (current.status !== event.status && event.status !== "unknown");
+  updateStatus(statuses, ip, event.status, event.at, reset);
+  if (statuses[ip]) {
+    statuses[ip].method = event.method || "ping";
+    if (event.valid != null && event.status === "online") {
+      statuses[ip].valid = event.valid;
+      statuses[ip].validTotal = event.validTotal;
+      statuses[ip].quality = event.valid < CAMERA_LAG_MINIMUM ? "lagging" : "ok";
+    } else {
+      delete statuses[ip].valid;
+      delete statuses[ip].validTotal;
+      delete statuses[ip].quality;
+    }
+  }
+}
+
 function parseAiboxStatusLine(line) {
   const timestamp = parseLogTime(line);
   let match = line.match(/(Initial AIBOX state|AIBOX unchanged|AIBOX status changed): .*?\(([^)]+)\) is (online|offline)/);
@@ -341,27 +372,35 @@ function parseAiboxStatusLine(line) {
 
 function parseTargetStatusLine(line) {
   const timestamp = parseLogTime(line);
-  let match = line.match(/(Initial target state|Target unchanged) from (.*?): .*?\(([^)]+)\) is (online|offline)/);
-  if (match) return { scopeName: match[2], ip: match[3], status: match[4], at: timestamp, reset: false };
+  const validMatch = line.match(/\[valid=(\d+)\/(\d+)\]/);
+  const valid = validMatch ? { valid: Number(validMatch[1]), validTotal: Number(validMatch[2]) } : {};
+  let match = line.match(/(Initial target state|Target unchanged) from (.*?): .*?\(([^)]+)\) is (online|offline)(?: \[method=([^\]]+)\])?/);
+  if (match) return { scopeName: match[2], ip: match[3], status: match[4], method: match[5] || "ping", ...valid, at: timestamp, reset: false };
+  match = line.match(/Target state unknown from (.*?): .*?\(([^)]+)\)/);
+  if (match) return { scopeName: match[1], ip: match[2], status: "unknown", method: "unknown", at: timestamp, reset: false };
   match = line.match(/Target offline from (.*?): .*?\(([^)]+)\)/);
-  if (match) return { scopeName: match[1], ip: match[2], status: "offline", at: timestamp, reset: true };
+  if (match) return { scopeName: match[1], ip: match[2], status: "offline", method: (line.match(/\[method=([^\]]+)\]/) || [])[1] || "ping", ...valid, at: timestamp, reset: true };
   match = line.match(/Target back online from (.*?): .*?\(([^)]+)\)/);
-  if (match) return { scopeName: match[1], ip: match[2], status: "online", at: timestamp, reset: true };
+  if (match) return { scopeName: match[1], ip: match[2], status: "online", method: (line.match(/\[method=([^\]]+)\]/) || [])[1] || "ping", ...valid, at: timestamp, reset: true };
   return null;
 }
 
 function parseScopeStatusLine(line, scopeIds) {
   const timestamp = parseLogTime(line);
-  let match = line.match(/Target checks started from (.*?) via .*?: \d+ target\(s\)$/);
+  let match = line.match(/Target checks started from (.*?): \d+ target\(s\)$/);
   if (match && scopeIds[match[1]]) {
     return { id: scopeIds[match[1]], status: "checking", at: timestamp, reset: false };
   }
-  match = line.match(/Target checks completed from (.*?) via .*?: \d+ target\(s\)$/);
+  match = line.match(/Target checks completed from (.*?): \d+ target\(s\)$/);
   if (match && scopeIds[match[1]]) {
     return { id: scopeIds[match[1]], status: "online", at: timestamp, reset: false, complete: true };
   }
+  match = line.match(/Target checks unavailable from (.*?): no checker available$/);
+  if (match && scopeIds[match[1]]) {
+    return { id: scopeIds[match[1]], status: "unknown", at: timestamp, reset: false, complete: true };
+  }
   const targetEvent = parseTargetStatusLine(line);
-  if (targetEvent && scopeIds[targetEvent.scopeName]) {
+  if (targetEvent && targetEvent.status !== "unknown" && scopeIds[targetEvent.scopeName]) {
     return { id: scopeIds[targetEvent.scopeName], status: "online", at: timestamp, reset: false, complete: false };
   }
   match = line.match(/Skipping target checks because no checker is available: (.+)$/);
@@ -372,7 +411,7 @@ function parseScopeStatusLine(line, scopeIds) {
 }
 
 function publicStatus(entry) {
-  return entry ? { status: entry.status, statusSince: entry.statusSince || null } : entry;
+  return entry ? { status: entry.status, statusSince: entry.statusSince || null, ...(entry.method ? { method: entry.method } : {}), ...(entry.quality ? { quality: entry.quality, valid: entry.valid, validTotal: entry.validTotal } : {}) } : entry;
 }
 
 function mergeStatusCache(current, cached) {
@@ -383,10 +422,10 @@ function mergeStatusCache(current, cached) {
   for (const ip of Object.keys(current)) {
     const cacheEntry = cached[ip];
     const currentEntry = current[ip];
-    merged[ip] = publicStatus(currentEntry);
+      merged[ip] = publicStatus(currentEntry);
     if (!cacheEntry || currentEntry.resetSeen || cacheEntry.status !== currentEntry.status || !cacheEntry.statusSince) continue;
     if (!currentEntry.statusSince || new Date(cacheEntry.statusSince).getTime() < new Date(currentEntry.statusSince).getTime()) {
-      merged[ip] = { status: currentEntry.status, statusSince: cacheEntry.statusSince };
+      merged[ip] = { ...publicStatus(currentEntry), statusSince: cacheEntry.statusSince };
     }
   }
   return merged;
@@ -422,7 +461,12 @@ function latestStatusSnapshot(text, scopeIds, scopeHistory) {
     const targetEvent = parseTargetStatusLine(line);
     const key = targetEvent ? targetStatusKey(targetEvent, scopeIds) : null;
     const scopeId = targetEvent ? scopeIds[targetEvent.scopeName] : null;
-    if (key) updateStatus(targets, key, targetEvent.status, targetEvent.at, targetEvent.reset || unavailableScopes.has(scopeId));
+    if (key) {
+      updateTargetStatus(targets, key, targetEvent);
+    }
+  }
+  for (const scopeId of unavailableScopes) {
+    if (scopes[scopeId] && scopes[scopeId].status === "online") scopes[scopeId] = { ...scopes[scopeId], status: "unknown" };
   }
   return { aiboxes, targets, scopes };
 }
@@ -444,6 +488,9 @@ function buildStatusHistory(config) {
   const latest = latestStatusSnapshot(readLog(logPath, scanBytes), scopeIds, history.scopes);
   const aiboxes = mergeStatusCache(latest.aiboxes, history.aiboxes);
   const targets = mergeStatusCache(latest.targets, history.targets);
+  for (const [key, event] of Object.entries(latest.targets)) {
+    if (event.status === "unknown" && targets[key]) targets[key] = { ...targets[key], status: "unknown", method: "unknown" };
+  }
   const scopes = mergeStatusCache(latest.scopes, history.scopes);
   const activeAiboxIps = new Set((config.aiboxes || []).map((box) => box.ip));
   for (const ip of Object.keys(aiboxes)) {
@@ -452,7 +499,7 @@ function buildStatusHistory(config) {
   const activeTargetKeys = new Set((config.target_scopes || []).flatMap((scope) => Object.keys(scope.targets || {}).map((ip) => `${scope.id}:${ip}`)));
   for (const key of Object.keys(targets)) {
     const scopeId = key.split(":", 1)[0];
-    if (!activeTargetKeys.has(key) || (scopes[scopeId] && scopes[scopeId].status === "unknown")) delete targets[key];
+    if (!activeTargetKeys.has(key) || (scopes[scopeId] && scopes[scopeId].status === "unknown" && targets[key].status !== "unknown")) delete targets[key];
   }
   for (const key of Object.keys(scopes)) {
     if (!Object.values(scopeIds).includes(key)) delete scopes[key];
@@ -540,6 +587,83 @@ function networkUnavailableSince(monitors, fallback) {
   return new Date(Math.max(...times)).toISOString();
 }
 
+const TV_EVENT_LIMIT = 40;
+const TV_CHANGE_WINDOW_MS = 24 * 60 * 60 * 1000;
+const TV_STATUS_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+function buildTvEventData(store, payload, config, nowMs) {
+  const aiboxNames = new Map((config.aiboxes || []).map((box) => [box.ip, box.name]));
+  const activeAiboxes = new Set((payload.aiboxes || []).map((box) => box.ip));
+  const scopeById = new Map((config.target_scopes || []).map((scope) => [scope.id, scope]));
+  const cameraMethods = new Map();
+  for (const network of payload.networks || []) {
+    for (const camera of network.cameras || []) {
+      cameraMethods.set(`${network.id}:${camera.ip}`, camera.method);
+    }
+  }
+  const events = [];
+  const timelines = [];
+  for (const [ip, entry] of Object.entries((store && store.aiboxes) || {})) {
+    if (!activeAiboxes.has(ip)) continue;
+    const normalized = normalizeAvailabilityEvents(entry && entry.events);
+    timelines.push({ kind: "aibox", events: normalized });
+    normalized.forEach((event, index) => {
+      if (new Date(event.at).getTime() > nowMs) return;
+      events.push({ at: event.at, kind: "aibox", change: event.status === "offline" ? "offline" : "online",
+        name: aiboxNames.get(ip) || ip, ip, deviceKey: ip, transition: index > 0 });
+    });
+  }
+  for (const [key, entry] of Object.entries((store && store.targets) || {})) {
+    const separator = key.indexOf(":");
+    if (separator < 0) continue;
+    const scopeId = key.slice(0, separator);
+    const ip = key.slice(separator + 1);
+    const scope = scopeById.get(scopeId);
+    if (!scope || !cameraMethods.has(key)) continue;
+    const method = cameraMethods.get(key);
+    const normalized = normalizeAvailabilityEvents(entry && entry.events);
+    timelines.push({ kind: "camera", events: normalized });
+    normalized.forEach((event, index) => {
+      if (new Date(event.at).getTime() > nowMs) return;
+      events.push({ at: event.at, kind: "camera", change: event.status === "offline" ? "offline" : "online",
+        scope: scope.name, name: (scope.targets || {})[ip] || ip, ip, ...(method ? { method } : {}),
+        deviceKey: key, transition: index > 0 });
+    });
+  }
+  events.sort((a, b) => new Date(b.at) - new Date(a.at));
+  const windowStart = nowMs - TV_CHANGE_WINDOW_MS;
+  const hourMs = 60 * 60 * 1000;
+  const changed = { aibox: new Set(), camera: new Set() };
+  const statusStart = nowMs - TV_STATUS_WINDOW_MS;
+  const buckets = Array.from({ length: Math.round(TV_STATUS_WINDOW_MS / hourMs) }, (_, index) => ({
+    from: new Date(statusStart + index * hourMs).toISOString(),
+    to: new Date(statusStart + (index + 1) * hourMs).toISOString(),
+  }));
+  for (const event of events) {
+    const at = new Date(event.at).getTime();
+    if (!event.transition || at < windowStart || at > nowMs) continue;
+    changed[event.kind].add(event.deviceKey);
+  }
+  return {
+    recentEvents: events.slice(0, TV_EVENT_LIMIT).map(({ deviceKey, transition, ...event }) => event),
+    changeCounts: { windowHours: 24, from: new Date(windowStart).toISOString(), to: new Date(nowMs).toISOString(),
+      aiboxes: changed.aibox.size, cameras: changed.camera.size },
+    statusSeries: buckets.map(({ from, to }) => {
+      const endMs = new Date(to).getTime();
+      const point = { from, to, aiboxOnline: 0, aiboxOffline: 0, cameraOnline: 0, cameraOffline: 0 };
+      for (const timeline of timelines) {
+        let status = null;
+        for (const event of timeline.events) {
+          if (new Date(event.at).getTime() > endMs) break;
+          status = event.status;
+        }
+        if (status) point[`${timeline.kind}${status === "online" ? "Online" : "Offline"}`] += 1;
+      }
+      return point;
+    }),
+  };
+}
+
 function normalize(config) {
   if (config.version !== 2) {
     throw new Error("Only v2 monitor config is supported by this webapp");
@@ -554,12 +678,14 @@ function normalize(config) {
   const statuses = mergeTailscaleDurations(history.aiboxes, loadTailscaleStatuses());
   writeJsonAtomic(historyPath, { updatedAt: new Date().toISOString(), fullScanCompleted: true, aiboxes: statuses, targets: targetStatuses, scopes: scopeStatuses });
   const generatedAt = new Date().toISOString();
+  const sourceUpdatedAt = fs.existsSync(logPath) ? fs.statSync(logPath).mtime.toISOString() : null;
   const enabledNetworkIds = new Set((config.aiboxes || [])
-    .filter((box) => box["check-devices"] !== false && box["check-resource"] !== false)
+    .filter((box) => box["check-devices"] !== false)
     .flatMap((box) => box.networks || []));
 
   const payload = {
     generatedAt,
+    sourceUpdatedAt,
     aiboxes: (config.aiboxes || []).map((box) => {
       const group = box.status_recipient_group || defaultGroup;
       return {
@@ -595,20 +721,22 @@ function normalize(config) {
             name,
             status: scopeUnavailable ? "unknown" : targetStatus ? targetStatus.status : "unknown",
             statusSince: scopeUnavailable ? unavailableSince : targetStatus ? targetStatus.statusSince : null,
+            method: targetStatus ? targetStatus.method || "ping" : "ping",
+            ...(targetStatus && targetStatus.quality ? { quality: targetStatus.quality, valid: targetStatus.valid, validTotal: targetStatus.validTotal } : {}),
           };
         }),
       };
     }),
   };
-  applyAvailability(payload, generatedAt);
+  const availabilityStore = applyAvailability(payload, generatedAt);
+  Object.assign(payload, buildTvEventData(availabilityStore, payload, config, new Date(generatedAt).getTime()));
   return payload;
 }
 
 const normalized = normalize(readJson(configPath));
 notifyAiboxTransitions(normalized.aiboxes);
 const payload = JSON.stringify(normalized, null, 2);
-writeTextAtomic(outPath, payload);
 writeTextAtomic(publicPath, payload);
 if (fs.existsSync(path.dirname(distPath))) writeTextAtomic(distPath, payload);
 pruneOldLogs();
-console.log(`Wrote ${outPath}`);
+console.log(`Wrote ${publicPath}`);
