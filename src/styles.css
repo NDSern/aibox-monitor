@@ -5577,6 +5577,10 @@ h3 { font-size: clamp(1.2rem, 2vw, 1.55rem); font-weight: 780; margin: 0 0 0.25r
   --tv-bad: #f58d8d;
   --tv-warn: #e7b769;
   --tv-unknown: #949494;
+  /* Cause colours read at wall distance: violet for undetermined, and a hot
+     orange that outranks amber without being mistaken for the power salmon. */
+  --tv-cause-unknown: #b98cff;
+  --tv-cause-network: #ff6b35;
   --text: var(--tv-text);
   --muted: var(--tv-muted);
   background: var(--tv-ground);
@@ -5637,11 +5641,11 @@ h3 { font-size: clamp(1.2rem, 2vw, 1.55rem); font-weight: 780; margin: 0 0 0.25r
 .tvDonutTrack { stroke: var(--tv-control); }
 .tvDonutSegment.online { stroke: var(--tv-good); }
 .tvDonutSegment.offline { stroke: var(--tv-bad); }
-.tvDonutSegment.unknown { stroke: var(--tv-unknown); }
+.tvDonutSegment.unknown { stroke: var(--tv-cause-unknown); }
 /* Outage causes share the ring with online, using the same colours as the
    cause legend and the historical charts. */
 .tvDonutSegment.power { stroke: var(--tv-bad); }
-.tvDonutSegment.network { stroke: var(--tv-warn); }
+.tvDonutSegment.network { stroke: var(--tv-cause-network); }
 .tvDonutTotal { fill: var(--tv-text); font-size: 22px; font-variant-numeric: tabular-nums; font-weight: 500; }
 .tvDonutLabel { fill: var(--tv-secondary); font-size: 10px; }
 .tvDonutInfo { min-width: 0; }
@@ -5652,7 +5656,7 @@ h3 { font-size: clamp(1.2rem, 2vw, 1.55rem); font-weight: 780; margin: 0 0 0.25r
 .tvDonutLegend i { border-radius: 50%; flex: 0 0 0.4rem; height: 0.4rem; }
 .tvDonutLegend i.online { background: var(--tv-good); }
 .tvDonutLegend i.offline { background: var(--tv-bad); }
-.tvDonutLegend i.unknown { background: var(--tv-unknown); }
+.tvDonutLegend i.unknown { background: var(--tv-cause-unknown); }
 .tvSiteAverage { color: var(--tv-muted); font-size: max(0.7rem, 0.7em); line-height: 1.4; margin: 0.1rem 0 0; overflow-wrap: anywhere; }
 .tvSiteAverage strong { color: var(--tv-text); font-variant-numeric: tabular-nums; font-weight: 500; }
 /* Offline cause counts beside the Camera donut (Mất nguồn / Mất mạng / Chưa rõ). */
@@ -5662,8 +5666,8 @@ h3 { font-size: clamp(1.2rem, 2vw, 1.55rem); font-weight: 780; margin: 0 0 0.25r
 .tvCauseLegend dd { color: var(--tv-text); font-variant-numeric: tabular-nums; font-weight: 500; margin: 0; }
 .tvCauseLegend i { border-radius: 50%; flex: 0 0 0.4rem; height: 0.4rem; }
 .tvCauseLegend i.power { background: var(--tv-bad); }
-.tvCauseLegend i.network { background: var(--tv-warn); }
-.tvCauseLegend i.unknown { background: var(--tv-unknown); }
+.tvCauseLegend i.network { background: var(--tv-cause-network); }
+.tvCauseLegend i.unknown { background: var(--tv-cause-unknown); }
 /* The three cause-reporting site panels get a taller box for readability.
    The grid still stretches them to share the available height. */
 .tvSiteRows:has(.tvSiteRow--causes) { grid-auto-rows: minmax(10rem, 1fr); }
@@ -5685,8 +5689,8 @@ h3 { font-size: clamp(1.2rem, 2vw, 1.55rem); font-weight: 780; margin: 0 0 0.25r
 .tvSiteOutage strong { font-variant-numeric: tabular-nums; font-weight: 500; }
 .tvOutageDevice { color: var(--tv-secondary); }
 .tvAnalysisPanels { display: grid; gap: 0.5rem; grid-template-rows: minmax(0, 1fr) auto; min-width: 0; }
-.tvView .tvSeriesWarn { color: var(--tv-warn); }
-.tvView .tvSeriesMuted { color: var(--tv-unknown); }
+.tvView .tvSeriesWarn { color: var(--tv-cause-network); }
+.tvView .tvSeriesMuted { color: var(--tv-cause-unknown); }
 .tvSeriesValue { font-variant-numeric: tabular-nums; font-weight: 500; }
 .tvSimRow { grid-template-columns: 6rem clamp(12rem, 14vw, 17rem) minmax(0, 1fr); }
 .tvSimRow .tvSiteName { grid-row: auto; }
