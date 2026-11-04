@@ -5580,7 +5580,7 @@ h3 { font-size: clamp(1.2rem, 2vw, 1.55rem); font-weight: 780; margin: 0 0 0.25r
   /* Cause colours read at wall distance. Power is a true red rather than a
      pale salmon so it cannot be confused with the unknown blue, and network
      is amber-orange: adjacent to red in meaning, clearly apart in hue. */
-  --tv-cause-unknown: #3d9bff;
+  --tv-cause-unknown: #ffffff;
   --tv-cause-network: #ffab00;
   --tv-cause-power: #ff3b3b;
   --text: var(--tv-text);
