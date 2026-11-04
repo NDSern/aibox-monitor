@@ -5627,7 +5627,7 @@ h3 { font-size: clamp(1.2rem, 2vw, 1.55rem); font-weight: 780; margin: 0 0 0.25r
 .tvActions .tvFullscreenButton { background: var(--tv-text); color: var(--tv-ground); }
 .tvPanel { background: var(--tv-surface); border-radius: 0.5rem; min-height: 0; min-width: 0; }
 .tvOverviewGrid { display: grid; gap: inherit; grid-template-columns: max-content minmax(0, 1fr); min-width: 0; }
-.tvSiteRows { align-content: start; display: grid; gap: 0.35rem; min-width: 0; }
+.tvSiteRows { align-content: stretch; display: grid; gap: 0.35rem; grid-auto-rows: minmax(0, 1fr); min-width: 0; }
 .tvSiteRow { align-items: center; display: grid; gap: 0.2rem 0.75rem; grid-template-columns: 6rem repeat(2, clamp(12rem, 14vw, 17rem)); padding: 0.3rem 0.75rem; }
 .tvSiteRow > * { min-width: 0; }
 .tvSiteName { grid-row: 1 / 3; }
@@ -5651,10 +5651,39 @@ h3 { font-size: clamp(1.2rem, 2vw, 1.55rem); font-weight: 780; margin: 0 0 0.25r
 .tvDonutLegend i.unknown { background: var(--tv-unknown); }
 .tvSiteAverage { color: var(--tv-muted); font-size: max(0.7rem, 0.7em); line-height: 1.4; margin: 0.1rem 0 0; overflow-wrap: anywhere; }
 .tvSiteAverage strong { color: var(--tv-text); font-variant-numeric: tabular-nums; font-weight: 500; }
+/* Offline cause counts beside the Camera donut (Mất nguồn / Mất mạng / Chưa rõ). */
+.tvCauseLegend { display: flex; flex-direction: column; font-size: max(0.75rem, 0.8em); gap: 0.1rem; line-height: 1.4; margin: 0; }
+.tvCauseLegend > div { align-items: baseline; display: grid; gap: 0.6rem; grid-template-columns: 5.5em auto; justify-content: start; }
+.tvCauseLegend dt { align-items: center; color: var(--tv-secondary); display: flex; font-weight: 400; gap: 0.35rem; min-width: 0; }
+.tvCauseLegend dd { color: var(--tv-text); font-variant-numeric: tabular-nums; font-weight: 500; margin: 0; }
+.tvCauseLegend i { border-radius: 50%; flex: 0 0 0.4rem; height: 0.4rem; }
+.tvCauseLegend i.power { background: var(--tv-bad); }
+.tvCauseLegend i.network { background: var(--tv-warn); }
+.tvCauseLegend i.unknown { background: var(--tv-unknown); }
+/* The three cause-reporting site panels get a taller box for readability.
+   The grid still stretches them to share the available height. */
+.tvSiteRows:has(.tvSiteRow--causes) { grid-auto-rows: minmax(10rem, 1fr); }
+/* A fully online group needs no analytical breakdown, just the fact. */
+.tvAllOnline { color: var(--tv-good); font-size: clamp(1rem, 1.15vw, 1.25rem); font-weight: 600; letter-spacing: 0.02em; line-height: 1.3; margin: 0; }
+/* Analytical text in the cause-reporting site panels is the primary reading,
+   so it is set larger than the shared legend default. */
+.tvSiteRow--causes .tvDonutLegend,
+.tvSiteRow--causes .tvCauseLegend { font-size: clamp(1rem, 1.05vw, 1.15rem); gap: 0.15rem; }
+/* Flexible label column: a fixed em width overflowed the narrow summary cell
+   on phones because the number column could not shrink. */
+.tvSiteRow--causes .tvDonutLegend > div,
+.tvSiteRow--causes .tvCauseLegend > div { gap: 0.6rem; grid-template-columns: minmax(0, 1fr) auto; justify-content: stretch; }
+.tvSiteRow--causes .tvDonutLegend dt,
+.tvSiteRow--causes .tvCauseLegend dt { overflow-wrap: anywhere; }
+.tvSiteRow--causes .tvSiteAverage { font-size: clamp(0.9rem, 0.95vw, 1.05rem); }
+.tvSiteRow--causes .tvDonutLabel { font-size: 11px; }
 .tvSiteOutage { color: var(--tv-muted); font-size: max(0.7rem, 0.7em); grid-column: 2 / 4; line-height: 1.35; overflow-wrap: anywhere; }
 .tvSiteOutage strong { font-variant-numeric: tabular-nums; font-weight: 500; }
 .tvOutageDevice { color: var(--tv-secondary); }
 .tvAnalysisPanels { display: grid; gap: 0.5rem; grid-template-rows: minmax(0, 1fr) auto; min-width: 0; }
+.tvView .tvSeriesWarn { color: var(--tv-warn); }
+.tvView .tvSeriesMuted { color: var(--tv-unknown); }
+.tvSeriesValue { font-variant-numeric: tabular-nums; font-weight: 500; }
 .tvSimRow { grid-template-columns: 6rem clamp(12rem, 14vw, 17rem) minmax(0, 1fr); }
 .tvSimRow .tvSiteName { grid-row: auto; }
 .tvSimOffline { align-self: stretch; display: flex; flex-direction: column; min-width: 0; }
@@ -5800,4 +5829,128 @@ h3 { font-size: clamp(1.2rem, 2vw, 1.55rem); font-weight: 780; margin: 0 0 0.25r
   .tvEventTable { font-size: 0.875rem; }
   .tvEventTable td { overflow-wrap: anywhere; white-space: normal; }
   .tvNoteContent { font-size: 1rem; }
+}
+
+/* Phone navigation for the shared primary rail. The rail is one 52px row: the
+   nav is a single non-wrapping line and every target stays at 44px minimum.
+   Previously the nav laid out as a 3-column grid, wrapping to two rows inside a
+   56px rail, which pushed the first row above the viewport. */
+@media (max-width: 760px) {
+  :is(.dashboardOnlyShell, .fleetShell, .connectivityShell) .sideRail {
+    align-items: center;
+    flex-wrap: nowrap;
+    height: auto;
+    min-height: 3.25rem;
+    overflow: hidden;
+    padding: 0.25rem 0.5rem;
+  }
+  :is(.dashboardOnlyShell, .fleetShell, .connectivityShell) .railLogo {
+    flex: 0 0 auto;
+    height: 2.4rem;
+    width: 2.4rem;
+  }
+  :is(.dashboardOnlyShell, .fleetShell, .connectivityShell) .railNav {
+    display: flex;
+    flex: 1;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    gap: 0.1rem;
+    min-width: 0;
+  }
+  :is(.dashboardOnlyShell, .fleetShell, .connectivityShell) .railButton {
+    align-items: center;
+    display: flex;
+    flex: 0 1 auto;
+    flex-direction: column;
+    gap: 0.125rem;
+    height: auto;
+    justify-content: center;
+    min-height: 2.75rem;
+    min-width: 3rem;
+    padding: 0.125rem 0.2rem;
+    width: auto;
+  }
+  :is(.dashboardOnlyShell, .fleetShell, .connectivityShell) .railButton svg {
+    height: 1.125rem;
+    width: 1.125rem;
+  }
+  :is(.dashboardOnlyShell, .fleetShell, .connectivityShell) .railButton span {
+    font-size: 0.56rem;
+    line-height: 1.1;
+  }
+  :is(.dashboardOnlyShell, .fleetShell, .connectivityShell) .railUtility {
+    display: flex;
+    flex: 0 0 auto;
+    height: auto;
+    min-height: 2.75rem;
+    min-width: 2.75rem;
+    padding: 0.4rem;
+  }
+}
+
+/* Camera hover preview on the overview board. Fixed positioning keeps it out
+   of the deck/track overflow clipping, and pointer-events: none stops the card
+   from stealing the hover that opened it. */
+.cameraHoverPreview.isLight {
+  --preview-surface: #ffffff;
+  --preview-ink: #16202a;
+  --preview-muted: #5c6773;
+  --preview-border: #d9dee6;
+}
+
+.cameraHoverPreview.isDark {
+  --preview-surface: #101c2f;
+  --preview-ink: #edf2f7;
+  --preview-muted: #a9b7c8;
+  --preview-border: #23334c;
+}
+
+.cameraHoverPreview {
+  background: var(--preview-surface);
+  border: 1px solid var(--preview-border);
+  border-radius: 0.5rem;
+  box-shadow: 0 18px 44px rgba(6, 14, 28, 0.32);
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.45rem;
+  pointer-events: none;
+  position: fixed;
+  z-index: 60;
+}
+
+.cameraPreviewFrame {
+  align-items: center;
+  background: #0d1420;
+  border-radius: 0.35rem;
+  color: #c7d2e0;
+  display: flex;
+  font-size: 0.78rem;
+  height: 180px;
+  justify-content: center;
+  overflow: hidden;
+  position: relative;
+  text-align: center;
+}
+
+.cameraPreviewFrame img {
+  display: block;
+  height: 100%;
+  object-fit: contain;
+  width: 100%;
+}
+
+.cameraPreviewNote { padding: 0 0.75rem; }
+.cameraHoverPreview.offline .cameraPreviewFrame { background: color-mix(in srgb, #7f1d1d 30%, #0d1420); color: #fecdd3; }
+
+.cameraPreviewMeta { display: grid; gap: 0.1rem; min-width: 0; }
+.cameraPreviewMeta strong { color: var(--preview-ink); font-size: 0.82rem; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cameraPreviewMeta span { color: var(--preview-muted); font-size: 0.7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cameraPreviewMeta small { color: var(--preview-muted); font-size: 0.66rem; font-weight: 700; text-transform: uppercase; }
+.cameraHoverPreview.online .cameraPreviewMeta small { color: #0b8f62; }
+.cameraHoverPreview.offline .cameraPreviewMeta small { color: #c0392b; }
+.dark .cameraHoverPreview.online .cameraPreviewMeta small { color: #65d6a6; }
+.dark .cameraHoverPreview.offline .cameraPreviewMeta small { color: #fb7185; }
+
+@media (prefers-reduced-motion: reduce) {
+  .cameraHoverPreview { box-shadow: 0 0 0 1px var(--preview-border); }
 }

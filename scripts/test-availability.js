@@ -3,7 +3,7 @@ const fs = require("fs");
 const vm = require("vm");
 // Evaluate only pure helpers; do not execute synchronization or notifications.
 const source = fs.readFileSync(require.resolve("./sync-data.js"), "utf8");
-const names = ["parseLogTime", "updateStatus", "updateTargetStatus", "parseAiboxStatusLine", "parseTargetStatusLine", "parseScopeStatusLine", "publicStatus", "mergeStatusCache", "targetStatusKey", "latestStatusSnapshot", "isValidTime", "parseExternalTime", "pruneAvailabilityEvents", "normalizeAvailabilityEvents", "updateAvailabilityEntry", "calculateAvailability", "buildTvEventData"];
+const names = ["parseLogTime", "updateStatus", "updateTargetStatus", "parseAiboxStatusLine", "parseTargetStatusLine", "parseScopeStatusLine", "publicStatus", "mergeStatusCache", "targetStatusKey", "latestStatusSnapshot", "isValidTime", "parseExternalTime", "pruneAvailabilityEvents", "normalizeAvailabilityEvents", "updateAvailabilityEntry", "calculateAvailability", "reasonSnapshotAt", "aiboxCauseAt", "buildTvEventData"];
 const context = { availabilityRetentionMs: 8 * 86400000, availabilityWindowMs: 7 * 86400000, TV_EVENT_LIMIT: 40, TV_CHANGE_WINDOW_MS: 86400000, TV_STATUS_WINDOW_MS: 86400000 };
 vm.createContext(context);
 for (const name of names) {
@@ -84,9 +84,9 @@ assert.equal(tv.changeCounts.cameras, 2, "same camera IP in separate scopes repr
 assert.equal(tv.statusSeries.length, 24, "24 hourly points");
 assert.equal(tv.statusSeries[0].from, new Date(now - 24 * hour).toISOString());
 const statusAt = (index) => { const { from, to, ...counts } = tv.statusSeries[index]; return counts; };
-assert.deepEqual(statusAt(0), { aiboxOnline: 2, aiboxOffline: 1, cameraOnline: 2, cameraOffline: 0 }, "status at hour end includes event exactly at end; flaps inside hour use last status");
-assert.deepEqual(statusAt(22), { aiboxOnline: 3, aiboxOffline: 0, cameraOnline: 1, cameraOffline: 1 }, "devices without history yet are not counted");
-assert.deepEqual(statusAt(23), { aiboxOnline: 2, aiboxOffline: 2, cameraOnline: 1, cameraOffline: 1 }, "latest point ignores future events and inactive devices");
+assert.deepEqual(statusAt(0), { aiboxOnline: 2, aiboxOffline: 1, aiboxPower: 0, aiboxNetwork: 0, aiboxUnknown: 1, cameraOnline: 2, cameraOffline: 0 }, "status at hour end includes event exactly at end; flaps inside hour use last status");
+assert.deepEqual(statusAt(22), { aiboxOnline: 3, aiboxOffline: 0, aiboxPower: 0, aiboxNetwork: 0, aiboxUnknown: 0, cameraOnline: 1, cameraOffline: 1 }, "devices without history yet are not counted");
+assert.deepEqual(statusAt(23), { aiboxOnline: 2, aiboxOffline: 2, aiboxPower: 0, aiboxNetwork: 0, aiboxUnknown: 2, cameraOnline: 1, cameraOffline: 1 }, "latest point ignores future events and inactive devices");
 assert(tv.recentEvents.every((item) => Date.parse(item.at) <= now && !('deviceKey' in item) && !('transition' in item)));
 assert.equal(JSON.stringify(tvStore), originalTvStore, "aggregation must not mutate history");
 const manyBoxes = Array.from({ length: 45 }, (_, index) => ({ ip: `box-${index}` }));

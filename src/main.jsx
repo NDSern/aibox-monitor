@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
 import useEmblaCarousel from "embla-carousel-react";
 import {
@@ -9,6 +10,7 @@ import {
   CaretLeft,
   CaretRight,
   CaretUp,
+  ClockCounterClockwise,
   Cube,
   DotsSixVertical,
   DownloadSimple,
@@ -33,14 +35,16 @@ import "@fontsource-variable/ibm-plex-sans";
 import "bootstrap/dist/css/bootstrap.min.css";
 import "./styles.css";
 import { loadDeviceOrder, moveDevice, orderDevices, saveDeviceOrder } from "./device-order.mjs";
-import { buildTvGroups, buildTvOfflineNetworks, buildTvSiteLabels } from "./tv-groups.mjs";
+import { buildAiboxOfflineReasons, buildTvGroups, buildTvOfflineNetworks, buildTvOfflineReasons, buildTvSiteLabels } from "./tv-groups.mjs";
+import TimelapseView from "./TimelapseView.jsx";
+import { mergeArchiveInventory } from "./timelapse-inventory.js";
 
 const EMPTY_DATA = { generatedAt: null, sourceUpdatedAt: null, aiboxes: [], networks: [] };
 const STATUS_FILTERS = ["all", "offline", "online", "unknown"];
 const DEFAULT_PANEL_SIZES = { aibox: 0.3, network: 0.68 };
 const PROJECTION_STALE_MS = 45_000;
 const SOURCE_STALE_MS = 120_000;
-const VIEW_PATHS = { tv: "/tv", dashboard: "/overview", fleet: "/fleet", connectivity: "/connectivity" };
+const VIEW_PATHS = { tv: "/tv", dashboard: "/overview", fleet: "/fleet", connectivity: "/connectivity", timelapse: "/timelapse" };
 
 function viewFromPath() {
   const pathname = window.location.pathname.replace(/\/+$/, "");
@@ -817,6 +821,173 @@ function useCameraAutoScroll(active) {
   return useAutoScroll(active, "y");
 }
 
+const HOVER_PREVIEW_DELAY_MS = 260;
+const PREVIEW_WIDTH = 320;
+const PREVIEW_HEIGHT = 180;
+const PREVIEW_MARGIN = 12;
+const PREVIEW_OFFSET = 16;
+
+// Latest saved snapshot for a camera, shown beside the pointer on hover/focus.
+// It deliberately never falls back to another camera or a placeholder image:
+// a missing or broken snapshot reads as "Chưa có ảnh".
+function CameraHoverPreview({ camera, network, anchor, theme, onClose }) {
+  const [imageState, setImageState] = useState("loading");
+  const [position, setPosition] = useState(null);
+  const pointerRef = useRef(anchor);
+  const nodeRef = useRef(null);
+  const frameRef = useRef(0);
+
+  useEffect(() => {
+    setImageState(camera.status === "online" ? "loading" : "idle");
+  }, [camera.ip, camera.status]);
+
+  const place = useCallback((point) => {
+    pointerRef.current = point;
+    if (frameRef.current) return;
+    frameRef.current = window.requestAnimationFrame(() => {
+      frameRef.current = 0;
+      const source = pointerRef.current;
+      if (!source) return;
+      // Measure the real card instead of guessing: the caption height depends
+      // on the label, and a wrong estimate lets the card run off-screen.
+      const card = nodeRef.current;
+      const width = card ? card.offsetWidth : PREVIEW_WIDTH;
+      const height = card ? card.offsetHeight : PREVIEW_HEIGHT + 66;
+      let left = source.x + PREVIEW_OFFSET;
+      let top = source.y + PREVIEW_OFFSET;
+      if (left + width + PREVIEW_MARGIN > window.innerWidth) left = source.x - width - PREVIEW_OFFSET;
+      if (top + height + PREVIEW_MARGIN > window.innerHeight) top = source.y - height - PREVIEW_OFFSET;
+      const next = {
+        left: clamp(left, PREVIEW_MARGIN, Math.max(PREVIEW_MARGIN, window.innerWidth - width - PREVIEW_MARGIN)),
+        top: clamp(top, PREVIEW_MARGIN, Math.max(PREVIEW_MARGIN, window.innerHeight - height - PREVIEW_MARGIN)),
+      };
+      // Comparing before storing keeps the post-mount re-clamp from looping.
+      setPosition((current) => current && current.left === next.left && current.top === next.top ? current : next);
+    });
+  }, []);
+
+  useEffect(() => {
+    place(anchor);
+    return () => {
+      if (frameRef.current) window.cancelAnimationFrame(frameRef.current);
+      frameRef.current = 0;
+    };
+  }, [anchor, place]);
+
+  useEffect(() => {
+    if (!position) return;
+    place(pointerRef.current || anchor);
+  }, [position, anchor, place]);
+
+  useEffect(() => {
+    function onKeyDown(event) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  if (!position) return null;
+
+  const label = cameraTileLabel(camera).label;
+  const online = camera.status === "online";
+  const message = camera.status === "online" ? null : statusLabel(camera.status) === "Mất kết nối" ? "Camera ngoại tuyến" : "Chưa rõ trạng thái";
+
+  // Portalled to <body>: the camera deck sits inside transformed and
+  // overflow-hidden containers, so position:fixed would resolve against them
+  // and the card could escape the viewport clamp.
+  return createPortal(
+    <div aria-hidden="true" className={`cameraHoverPreview ${theme === "dark" ? "isDark" : "isLight"} ${camera.status}`} onMouseMove={(event) => place({ x: event.clientX, y: event.clientY })} ref={nodeRef} role="presentation" style={{ left: `${position.left}px`, top: `${position.top}px`, width: `${PREVIEW_WIDTH}px` }}>
+      <div className="cameraPreviewFrame">
+        {online ? (
+          <>
+            <img
+              alt=""
+              onError={() => setImageState("error")}
+              onLoad={() => setImageState("ready")}
+              src={`/camera-snapshots/${network.id}/${camera.ip}.jpg`}
+            />
+            {imageState !== "ready" ? <span className="cameraPreviewNote">{imageState === "error" ? "Chưa có ảnh" : "Đang tải ảnh…"}</span> : null}
+          </>
+        ) : <span className="cameraPreviewNote">{message}</span>}
+      </div>
+      <div className="cameraPreviewMeta">
+        <strong>{label}</strong>
+        <span>{network.name} · {camera.ip}</span>
+        <small>{statusLabel(camera.status)}</small>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+// The camera pill owns the hover/focus lifecycle so the preview follows the
+// pointer across neighbouring pills without flicker.
+function CameraPill({ camera, network, theme, onHoverChange }) {
+  const tile = cameraTileLabel(camera);
+  const [anchor, setAnchor] = useState(null);
+  const hoverTimerRef = useRef(0);
+  const anchorRef = useRef(null);
+
+  const close = useCallback(() => {
+    window.clearTimeout(hoverTimerRef.current);
+    hoverTimerRef.current = 0;
+    anchorRef.current = null;
+    setAnchor(null);
+    onHoverChange(false);
+  }, [onHoverChange]);
+
+  useEffect(() => close, [close]);
+
+  const open = useCallback((point) => {
+    window.clearTimeout(hoverTimerRef.current);
+    hoverTimerRef.current = window.setTimeout(() => {
+      anchorRef.current = point;
+      setAnchor(point);
+      onHoverChange(true);
+    }, HOVER_PREVIEW_DELAY_MS);
+  }, [onHoverChange]);
+
+  const move = useCallback((event) => {
+    const point = { x: event.clientX, y: event.clientY };
+    if (!anchorRef.current) {
+      // Waiting out the delay: restart from the newest pointer position.
+      window.clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = window.setTimeout(() => {
+        anchorRef.current = point;
+        setAnchor(point);
+        onHoverChange(true);
+      }, HOVER_PREVIEW_DELAY_MS);
+      return;
+    }
+    setAnchor(point);
+  }, [onHoverChange]);
+
+  const methodLabel = camera.method === "image" ? "Kiểm tra hình ảnh" : camera.method === "ping-fallback" ? "Ping dự phòng" : camera.method === "ping" ? "Kiểm tra ping" : "Chưa thể kiểm tra";
+
+  return (
+    <>
+      <article
+        aria-label={`${camera.name}, IP ${camera.ip}, ${statusLabel(camera.status)}, ${methodLabel}`}
+        className={`networkCameraTile ${camera.status}`}
+        key={`${network.id}-${camera.ip}`}
+        onBlur={close}
+        onFocus={(event) => {
+          const box = event.currentTarget.getBoundingClientRect();
+          open({ x: box.right, y: box.top });
+        }}
+        onMouseEnter={(event) => open({ x: event.clientX, y: event.clientY })}
+        onMouseLeave={close}
+        onMouseMove={move}
+        title={`${camera.name} · ${camera.ip} · ${methodLabel}`}
+      >
+        <StatusSymbol status={camera.status} /><RollingName className={tile.isIp ? "cameraIp mono" : "cameraName"} name={tile.label} /><small aria-label={methodLabel} className={`cameraMethod ${camera.method === "image" ? "image" : camera.method === "unknown" ? "unknown" : "ping"}`}>{camera.method === "image" ? "ẢNH" : camera.method === "ping-fallback" ? "PING*" : camera.method === "ping" ? "PING" : "—"}</small>{camera.quality === "lagging" ? <small aria-label="Trễ" className="cameraMethod lag" title={`Trễ (${camera.valid}/${camera.validTotal} khung hình hợp lệ)`}>TRỄ</small> : null}{typeof camera.availability === "number" ? <small className="tileAvailability" title="Tỷ lệ thời gian kết nối">{formatAvailability(camera.availability)}</small> : null}
+      </article>
+      {anchor ? <CameraHoverPreview anchor={anchor} camera={camera} network={network} onClose={close} theme={theme} /> : null}
+    </>
+  );
+}
+
 function NetworkCameraGrid({ cameras, columns, label, networkId, render }) {
   const scrollRef = useCameraAutoScroll(true);
   return (
@@ -1474,14 +1645,19 @@ function ConnectivityView({ aiboxes, now }) {
 }
 
 const TV_REFRESH_NOTE = "Giám sát vận hành · cập nhật mỗi 10 giây";
+// Sites whose Camera summary shows offline cause counts instead of connection counts.
+const CAUSE_SITE_IDS = new Set(["mxa", "giaminh", "ships"]);
 
 function tvTime(at, options) {
   const date = new Date(at);
   return at != null && Number.isFinite(date.getTime()) ? date.toLocaleTimeString("vi-VN", options) : "—";
 }
 
-function TvDeviceSummary({ label, summary, unknownLabel, footer }) {
+function TvDeviceSummary({ label, summary, unknownLabel, footer, causes, allOnline }) {
   let offset = 0;
+  // A group with nothing to report should read as one plain statement rather
+  // than a legend of zeroes. Empty groups are not "all online".
+  const healthy = allOnline && summary.total > 0 && summary.online === summary.total && !summary.offline && !summary.unknown;
   const name = (status) => status === "unknown" ? unknownLabel : statusLabel(status);
   const segments = (unknownLabel ? ["online", "offline", "unknown"] : ["online", "offline"]).map((status) => {
     const length = summary.total ? summary[status] / summary.total * 100 : 0;
@@ -1498,40 +1674,37 @@ function TvDeviceSummary({ label, summary, unknownLabel, footer }) {
         <text className="tvDonutLabel" x="40" y="53" textAnchor="middle">{label}</text>
       </svg>
       <div className="tvDonutInfo">
-        <dl className="tvDonutLegend">
-          {segments.map(({ status }) => <div key={status} title={status === "unknown" ? "Camera không kiểm tra được vì AIBOX giám sát đang mất kết nối" : undefined}><dt><i aria-hidden="true" className={status} />{name(status)}</dt><dd>{summary[status]}</dd></div>)}
-        </dl>
-        {footer || <p className="tvSiteAverage">Kết nối TB <strong>{formatAvailability(summary.availability)}</strong>{summary.measured < summary.total ? <span title="Số thiết bị có lịch sử"> · {summary.measured}/{summary.total}</span> : null}{summary.lagging ? <span className="tvWarn"> · {summary.lagging} trễ</span> : null}</p>}
+        {healthy ? (
+          <p className="tvAllOnline">ALL ONLINE</p>
+        ) : causes ? (
+          <dl className="tvCauseLegend">
+            {causes.map((cause) => (
+              <div key={cause.key}><dt><i aria-hidden="true" className={cause.key} />{cause.label}</dt><dd>{cause.count}</dd></div>
+            ))}
+          </dl>
+        ) : (
+          <dl className="tvDonutLegend">
+          {["offline", "online", "unknown"].filter((status) => status !== "unknown" || unknownLabel).map((status) => <div key={status} title={status === "unknown" ? "Camera không kiểm tra được vì AIBOX giám sát đang mất kết nối" : undefined}><dt><i aria-hidden="true" className={status} />{name(status)}</dt><dd>{summary[status]}</dd></div>)}
+          </dl>
+        )}
+        {healthy || causes || !footer ? null : footer}
       </div>
     </div>
   );
 }
 
-function TvChangeChart({ series, totals = {} }) {
-  const points = Array.isArray(series) ? series : [];
-  const hasHistory = points.some((point) => ["aiboxOnline", "aiboxOffline", "cameraOnline", "cameraOffline"].some((key) => point[key]));
-  return (
-    <section aria-labelledby="tv-trend-title" className="tvPanel tvTrendPanel">
-      <header className="tvPanelHeader"><h2 id="tv-trend-title">Thay đổi theo giờ</h2><span>24 giờ qua</span></header>
-      {points.length ? <>
-        <div className="tvTrendCharts">
-          <TvStatusChart id="aibox" label="AIBOX" onlineKey="aiboxOnline" total={totals.aibox} points={points} />
-          <TvStatusChart id="camera" label="Camera" onlineKey="cameraOnline" total={totals.camera} points={points} />
-        </div>
-        {hasHistory ? null : <p className="tvChartNote">Chưa có lịch sử trạng thái trong 24 giờ qua.</p>}
-      </> : <p className="tvEmpty">Đang chờ lịch sử trạng thái.</p>}
-    </section>
-  );
-}
-
-function TvStatusChart({ id, label, onlineKey, total = 0, points }) {
-  const lines = [
-    { key: onlineKey, label: "Kết nối", className: "tvSeriesGood" },
-  ];
-  const titleId = `tv-trend-${id}-title`;
-  const descId = `tv-trend-${id}-description`;
+function TvTrendChart({ id, label, lines, points, emptyNote }) {
+  const totals = lines.map((line) => ({
+    ...line,
+    total: (() => {
+      for (let index = points.length - 1; index >= 0; index -= 1) {
+        if (typeof points[index][line.key] === "number") return points[index][line.key];
+      }
+      return 0;
+    })(),
+  }));
   const peak = Math.max(0, ...points.flatMap((point) => lines.map((line) => point[line.key] || 0)));
-  const maximum = Math.max(2, Math.ceil(Math.max(peak, total) / 2) * 2);
+  const maximum = Math.max(2, Math.ceil(peak / 2) * 2);
   const frameRef = useRef(null);
   const [size, setSize] = useState({ width: 480, height: 140 });
   useEffect(() => {
@@ -1548,26 +1721,81 @@ function TvStatusChart({ id, label, onlineKey, total = 0, points }) {
   const left = 36;
   const right = size.width - 20;
   const bottom = size.height - 24;
-  const x = (index) => left + (index + 0.5) / points.length * (right - left);
+  const x = (index) => left + (index + 0.5) / Math.max(1, points.length) * (right - left);
   const y = (value) => bottom - value / maximum * (bottom - 16);
-  const hourLabel = (at) => tvTime(at, { hour: "2-digit", minute: "2-digit", hour12: false });
   const pointWidth = (right - left) / Math.max(1, points.length);
   const tickStep = [1, 2, 3, 4, 6, 12].find((step) => step * pointWidth >= 48) || 24;
   const ticks = points.flatMap((point, index) => new Date(point.to).getHours() % tickStep === 0 ? [index] : []);
+  // Reason history starts when the recorder was deployed; buckets before the
+  // first snapshot must not read as "zero offline cameras", so each run of
+  // consecutive sampled buckets becomes its own polyline (or a dot if alone).
+  const segmentsFor = (key) => {
+    const segments = [];
+    let current = null;
+    points.forEach((point, index) => {
+      if (typeof point[key] !== "number") { current = null; return; }
+      if (!current) { current = { key: `${key}-${index}`, points: [] }; segments.push(current); }
+      current.points.push({ index, value: point[key] });
+    });
+    return segments;
+  };
+  const titleId = `tv-trend-${id}-title`;
+  const descId = `tv-trend-${id}-description`;
+  const hasHistory = points.some((point) => lines.some((line) => point[line.key]));
   return (
     <figure aria-labelledby={titleId} className="tvTrendChartBlock">
-      <figcaption className="tvChartLegend"><h3 id={titleId}>{label}</h3>{lines.map((line) => <span className={line.className} key={line.key}><i aria-hidden="true" />{line.label}</span>)}{total > 0 && <span className="tvSeriesTotal"><i aria-hidden="true" />Tổng {total}</span>}</figcaption>
-        <div className="tvTrendFrame" ref={frameRef}><svg className="tvTrendChart" viewBox={`0 0 ${size.width} ${size.height}`} width={size.width} height={size.height} role="img" aria-labelledby={`${titleId} ${descId}`}>
-          <desc id={descId}>Số {label} kết nối vào cuối mỗi giờ{total > 0 ? `; đường nét đứt là tổng số ${total}` : ""}. Chi tiết có trong bảng dữ liệu bên dưới.</desc>
-          {[0, maximum / 2, maximum].map((value) => <g key={value}><line className="tvChartGrid" x1={left} x2={right} y1={y(value)} y2={y(value)} /><text className="tvChartAxis" x="27" y={y(value) + 4} textAnchor="end">{value}</text></g>)}
-          {total > 0 && <line className="tvChartTotal" x1={left} x2={right} y1={y(total)} y2={y(total)} />}
-          {ticks.map((index) => <text className="tvChartAxis" key={index} x={x(index)} y={size.height - 4} textAnchor="middle">{hourLabel(points[index].to)}</text>)}
-          {lines.map((line) => <g className={line.className} key={line.key}>
-            <polyline className="tvChartLine" points={points.map((point, index) => `${x(index)},${y(point[line.key] || 0)}`).join(" ")} fill="none" strokeWidth="2.5" />
-          </g>)}
-        </svg></div>
-        <table className="visually-hidden"><caption>Số {label} theo trạng thái vào cuối mỗi giờ</caption><thead><tr><th scope="col">Thời điểm</th>{lines.map((line) => <th key={line.key} scope="col">{line.label}</th>)}</tr></thead><tbody>{points.map((point) => <tr key={point.from}><th scope="row">{formatGeneratedAt(point.to)}</th>{lines.map((line) => <td key={line.key}>{point[line.key] || 0}</td>)}</tr>)}</tbody></table>
+      <figcaption className="tvChartLegend">
+        <h3 id={titleId}>{label}</h3>
+        {totals.map((line) => <span className={line.className} key={line.key}><i aria-hidden="true" />{line.label} <strong className="tvSeriesValue">{line.total}</strong></span>)}
+      </figcaption>
+      <div className="tvTrendFrame" ref={frameRef}><svg className="tvTrendChart" viewBox={`0 0 ${size.width} ${size.height}`} width={size.width} height={size.height} role="img" aria-labelledby={`${titleId} ${descId}`}>
+        <desc id={descId}>{`Số ${label.toLowerCase()} mất kết nối vào cuối mỗi giờ trong 24 giờ qua. Chi tiết có trong bảng dữ liệu bên dưới.`}</desc>
+        {[0, maximum / 2, maximum].map((value) => <g key={value}><line className="tvChartGrid" x1={left} x2={right} y1={y(value)} y2={y(value)} /><text className="tvChartAxis" x="27" y={y(value) + 4} textAnchor="end">{value}</text></g>)}
+        {ticks.map((index) => <text className="tvChartAxis" key={index} x={x(index)} y={size.height - 4} textAnchor="middle">{tvTime(points[index].to, { hour: "2-digit", minute: "2-digit", hour12: false })}</text>)}
+        {lines.map((line) => <g className={line.className} key={line.key}>
+          {segmentsFor(line.key).map((segment) => segment.points.length === 1
+            ? <circle className="tvChartLine" key={segment.key} cx={x(segment.points[0].index)} cy={y(segment.points[0].value)} r="2.5" fill="currentColor" />
+            : <polyline className="tvChartLine" key={segment.key} points={segment.points.map(({ index, value }) => `${x(index)},${y(value)}`).join(" ")} fill="none" strokeWidth="2.5" />)}
+        </g>)}
+      </svg></div>
+      <table className="visually-hidden"><caption>{`Số ${label.toLowerCase()} mất kết nối vào cuối mỗi giờ`}</caption><thead><tr><th scope="col">Thời điểm</th>{lines.map((line) => <th key={line.key} scope="col">{line.label}</th>)}</tr></thead><tbody>{points.map((point) => <tr key={point.from}><th scope="row">{formatGeneratedAt(point.to)}</th>{lines.map((line) => <td key={line.key}>{point[line.key] || 0}</td>)}</tr>)}</tbody></table>
+      {hasHistory || !emptyNote ? null : <p className="tvChartNote">{emptyNote}</p>}
     </figure>
+  );
+}
+
+function TvOfflineReasons({ series }) {
+  const points = Array.isArray(series) ? series : [];
+  return (
+    <section aria-labelledby="tv-trend-title" className="tvPanel tvTrendPanel">
+      <header className="tvPanelHeader"><h2 id="tv-trend-title">Mất kết nối theo giờ</h2><span>24 giờ qua</span></header>
+      {points.length ? (
+        <div className="tvTrendCharts">
+          <TvTrendChart
+            emptyNote="Chưa có lịch sử nguyên nhân AIBOX trong 24 giờ qua."
+            id="aibox"
+            label="AIBOX"
+            lines={[
+              { key: "aiboxPower", label: "Mất nguồn", className: "tvSeriesBad" },
+              { key: "aiboxNetwork", label: "Mất mạng", className: "tvSeriesWarn" },
+              { key: "aiboxUnknown", label: "Chưa rõ", className: "tvSeriesMuted" },
+            ]}
+            points={points}
+          />
+          <TvTrendChart
+            emptyNote="Chưa có lịch sử nguyên nhân trong 24 giờ qua."
+            id="camera"
+            label="Camera"
+            lines={[
+              { key: "cameraPower", label: "Mất nguồn", className: "tvSeriesBad" },
+              { key: "cameraNetwork", label: "Mất mạng", className: "tvSeriesWarn" },
+              { key: "cameraUnknown", label: "Chưa rõ", className: "tvSeriesMuted" },
+            ]}
+            points={points}
+          />
+        </div>
+      ) : <p className="tvEmpty">Đang chờ lịch sử trạng thái.</p>}
+    </section>
   );
 }
 
@@ -1708,7 +1936,30 @@ function TvDashboard({ data, loadError, isUpdating, onRefresh, notes, noteLookup
   };
 
   const siteGroups = useMemo(() => buildTvGroups(data), [data.aiboxes, data.networks]);
+  // A site row with no devices carries no information; drop it so the
+  // remaining rows can use the freed vertical space.
+  const visibleSiteGroups = useMemo(
+    () => siteGroups.filter((group) => group.machines.total > 0 || group.cameras.total > 0),
+    [siteGroups],
+  );
   const siteLabels = useMemo(() => buildTvSiteLabels(data), [data.aiboxes, data.networks]);
+  // Per-site offline cause counts (Mất nguồn / Mất mạng / Chưa rõ) for the
+  // Camera summaries. Reuses the same classification as the trend chart.
+  const causeCounts = useMemo(() => {
+    const bySite = new Map();
+    buildTvOfflineReasons(data).forEach((reason) => {
+      reason.sites.forEach((site) => {
+        const entry = bySite.get(site.label) || {};
+        entry[reason.id] = site.count;
+        bySite.set(site.label, entry);
+      });
+    });
+    return bySite;
+  }, [data]);
+  // AIBOX causes come from boot evidence: a box that rebooted while it was
+  // unreachable lost power; one that kept the same boot session only lost its
+  // link. Boxes still down have no evidence yet and stay "unknown".
+  const aiboxCauseCounts = useMemo(() => buildAiboxOfflineReasons(data), [data]);
   const offlineNetworks = useMemo(() => buildTvOfflineNetworks(data), [data.networks]);
   const totals = siteGroups.reduce((sum, group) => ({
     aiboxOnline: sum.aiboxOnline + group.machines.online, aiboxOffline: sum.aiboxOffline + group.machines.offline,
@@ -1758,15 +2009,38 @@ function TvDashboard({ data, loadError, isUpdating, onRefresh, notes, noteLookup
 
       <div className="tvOverviewGrid">
       <section aria-label="Trạng thái theo khu vực" className="tvSiteRows">
-        {siteGroups.map((group) => {
+        {visibleSiteGroups.map((group) => {
           const outage = group.longestOutage;
           const offlineCount = group.machines.offline + group.cameras.offline;
           const device = outage ? outage.kind === "camera" ? cameraTileLabel(outage) : { label: compactDeviceName(outage.name) || outage.ip, isIp: !outage.name || outage.name === outage.ip } : null;
           return (
-            <article aria-labelledby={`tv-site-${group.id}`} className={`tvPanel tvSiteRow${group.id === "other" ? " tvSiteRow--other" : ""}`} key={group.id}>
+            <article aria-labelledby={`tv-site-${group.id}`} className={`tvPanel tvSiteRow${group.id === "other" ? " tvSiteRow--other" : ""}${CAUSE_SITE_IDS.has(group.id) ? " tvSiteRow--causes" : ""}`} key={group.id}>
               <div className="tvSiteName"><h2 id={`tv-site-${group.id}`}>{group.label}</h2></div>
-              <TvDeviceSummary label="AIBOX" summary={group.machines} />
-              <TvDeviceSummary label="Camera" summary={group.cameras} unknownLabel="Mất AIBOX" />
+              {CAUSE_SITE_IDS.has(group.id) ? (
+                <TvDeviceSummary
+                  causes={[
+                    { key: "power", label: "Mất nguồn", count: aiboxCauseCounts.get(group.label)?.power || 0 },
+                    { key: "network", label: "Mất mạng", count: aiboxCauseCounts.get(group.label)?.network || 0 },
+                    { key: "unknown", label: "Chưa rõ", count: aiboxCauseCounts.get(group.label)?.unknown || 0 },
+                  ]}
+                  allOnline
+                  label="AIBOX"
+                  summary={group.machines}
+                />
+              ) : <TvDeviceSummary label="AIBOX" summary={group.machines} />}
+              {CAUSE_SITE_IDS.has(group.id) ? (
+                <TvDeviceSummary
+                  causes={[
+                    { key: "power", label: "Mất nguồn", count: causeCounts.get(group.label)?.power || 0 },
+                    { key: "network", label: "Mất mạng", count: causeCounts.get(group.label)?.network || 0 },
+                    { key: "unknown", label: "Chưa rõ", count: causeCounts.get(group.label)?.unknown || 0 },
+                  ]}
+                  allOnline
+                  label="Camera"
+                  summary={group.cameras}
+                  unknownLabel="Mất AIBOX"
+                />
+              ) : <TvDeviceSummary label="Camera" summary={group.cameras} unknownLabel="Mất AIBOX" />}
               <div className="tvSiteOutage">
                 <span>Mất kết nối lâu nhất{group.undatedOffline ? " đã rõ" : ""}: </span>
                 <strong className={offlineCount ? "tvBad" : "tvMuted"}>{outage ? formatDuration(outage.statusSince, tvNow) : offlineCount ? "Chưa rõ thời điểm" : "Không có"}</strong>
@@ -1779,7 +2053,7 @@ function TvDashboard({ data, loadError, isUpdating, onRefresh, notes, noteLookup
       </section>
 
       <div className="tvAnalysisPanels">
-        <TvChangeChart series={data.statusSeries} totals={deviceTotals} />
+        <TvOfflineReasons series={data.statusSeries} />
         <section aria-labelledby="tv-sim-title" className="tvPanel tvSiteRow tvSimRow">
           <div className="tvSiteName"><h2 id="tv-sim-title">SIM 4G</h2></div>
           {fleet ? <>
@@ -1935,6 +2209,21 @@ function App() {
 
   const aiboxes = data.aiboxes ?? [];
   const cameraNetworks = data.networks ?? [];
+  // Cameras discovered on boxes that were offline during the archive rollout.
+  // Only the timelapse view consumes them, so they stay out of TV/overview.
+  const [archiveInventory, setArchiveInventory] = useState(null);
+  useEffect(() => {
+    let stopped = false;
+    fetch(`/camera-archive-inventory.json?t=${Date.now()}`, { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload) => { if (!stopped && payload) setArchiveInventory(payload); })
+      .catch(() => {});
+    return () => { stopped = true; };
+  }, []);
+  const timelapseNetworks = useMemo(
+    () => mergeArchiveInventory(cameraNetworks, archiveInventory),
+    [cameraNetworks, archiveInventory],
+  );
   const loaded = isDataLoaded(data);
   const online = aiboxes.filter((box) => box.status === "online").length;
   const offline = aiboxes.filter((box) => box.status === "offline").length;
@@ -1997,7 +2286,6 @@ function App() {
   const updateLabel = loadError ? "Mất kết nối" : (isUpdating || !loaded) ? "Đang cập nhật" : isStale ? "Dữ liệu cũ" : "Trực tiếp";
   const dashboardAlerts = [
     loadError ? { action: "Thử lại", tone: "danger", text: `Không lấy được trạng thái. Đang hiển thị dữ liệu gần nhất: ${loadError}` } : null,
-    !loadError && sourceStale ? { action: "Làm mới", tone: "warning", text: `Dữ liệu giám sát chưa cập nhật. Nguồn cập nhật ${formatDataAge(sourceUpdatedAt, now)}.` } : null,
     !loadError && projectionStale && !sourceStale ? { action: "Làm mới", tone: "warning", text: `Bảng giám sát chưa cập nhật. Dữ liệu tạo ${formatDataAge(data.generatedAt, now)}.` } : null,
     noteError ? { tone: "warning", text: `Lỗi ghi chú: ${noteError}` } : null,
     layoutError ? { tone: "warning", text: `Lỗi thứ tự thiết bị: ${layoutError}` } : null,
@@ -2054,7 +2342,14 @@ function App() {
   const safeAiboxPage = clamp(aiboxPage, 0, Math.max(0, aiboxPageMeta.count - 1));
   const canDragAiboxes = manageMode && activeView === "fleet" && statusFilter === "all" && loaded;
   const canDragNetworks = manageMode && activeView === "fleet" && loaded;
+  // A camera preview floating over the board counts as interaction, so the
+  // overview carousel must not rotate the page out from under the pointer.
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const handlePreviewOpenChange = useCallback((open) => {
+    setPreviewOpen((current) => (current === open ? current : open));
+  }, []);
   const playbackBlocked = activeView !== "dashboard"
+    || previewOpen
     || !loaded
     || !documentVisible
     || reducedMotion
@@ -3050,15 +3345,16 @@ function App() {
   }
 
   return (
-    <main className={`page ${theme} dashboardShell ${activeView === "dashboard" ? "dashboardOnlyShell" : activeView === "connectivity" ? "connectivityShell" : activeView === "tv" ? "tvShell" : "fleetShell"} ${resizingPanel ? "isResizing" : ""} ${loaded && !dataCurrent ? "lastKnownData" : ""}`} data-bs-theme={theme}>
+    <main className={`page ${theme} dashboardShell ${activeView === "dashboard" ? "dashboardOnlyShell" : activeView === "connectivity" ? "connectivityShell" : activeView === "tv" ? "tvShell" : activeView === "timelapse" ? "timelapseShell dashboardOnlyShell" : "fleetShell"} ${resizingPanel ? "isResizing" : ""} ${loaded && !dataCurrent ? "lastKnownData" : ""}`} data-bs-theme={theme}>
       <a className="skipLink" href="#main-content">Đến nội dung chính</a>
       <aside className="sideRail" aria-label="Điều hướng chính">
         <button className="railLogo" onClick={() => { setActiveView("dashboard"); focusDashboard("all"); }} type="button" aria-label="Mở tổng quan" title="AIBOX"><Cube aria-hidden="true" size={22} weight="bold" /></button>
         <nav className="railNav">
           <button aria-label="Tổng quan vận hành" aria-pressed={activeView === "dashboard"} className={`railButton ${activeView === "dashboard" ? "active" : ""}`} onClick={() => { setActiveView("dashboard"); focusDashboard("all"); }} type="button" title="Tổng quan vận hành"><SquaresFour aria-hidden="true" size={20} weight="fill" /><span>Tổng quan</span></button>
           <button aria-label="Chi tiết thiết bị" aria-pressed={activeView === "fleet"} className={`railButton ${activeView === "fleet" ? "active" : ""}`} onClick={() => setActiveView("fleet")} type="button" title="Chi tiết thiết bị"><ListBullets aria-hidden="true" size={20} weight="bold" /><span>Thiết bị</span></button>
-          <button aria-label="Lịch sử kết nối" aria-pressed={activeView === "connectivity"} className={`railButton ${activeView === "connectivity" ? "active" : ""}`} onClick={() => setActiveView("connectivity")} type="button" title="Lịch sử kết nối"><Waveform aria-hidden="true" size={20} weight="bold" /><span>Kết nối</span></button>
+          <button aria-label="USB" aria-pressed={activeView === "connectivity"} className={`railButton ${activeView === "connectivity" ? "active" : ""}`} onClick={() => setActiveView("connectivity")} type="button" title="USB"><Waveform aria-hidden="true" size={20} weight="bold" /><span>USB</span></button>
           <button aria-label="Màn hình TV" aria-pressed={activeView === "tv"} className={`railButton ${activeView === "tv" ? "active" : ""}`} onClick={() => setActiveView("tv")} type="button" title="Màn hình TV"><Television aria-hidden="true" size={20} weight="bold" /><span>TV</span></button>
+          <button aria-label="Camera" aria-pressed={activeView === "timelapse"} className={`railButton ${activeView === "timelapse" ? "active" : ""}`} onClick={() => setActiveView("timelapse")} type="button" title="Camera"><ClockCounterClockwise aria-hidden="true" size={20} weight="bold" /><span>Camera</span></button>
         </nav>
         <div className="railBottom">
           <button aria-label={`Dùng giao diện ${theme === "dark" ? "sáng" : "tối"}`} aria-pressed={theme === "dark"} className="railUtility" onClick={() => setTheme((currentTheme) => (currentTheme === "dark" ? "light" : "dark"))} type="button">{theme === "dark" ? <Sun aria-hidden="true" size={18} weight="bold" /> : <Moon aria-hidden="true" size={18} weight="bold" />}<span>{theme === "dark" ? "Sáng" : "Tối"}</span></button>
@@ -3067,7 +3363,7 @@ function App() {
       <div className="appFrame" id="main-content">
         {activeView !== "tv" ? (<>
         <header className="topBar">
-          <div className="brandLine"><strong>Giám sát AIBOX</strong><span /><em>{activeView === "dashboard" ? "Tổng quan vận hành" : activeView === "connectivity" ? "Lịch sử kết nối" : activeView === "tv" ? "Màn hình TV" : "Chi tiết thiết bị"}</em></div>
+          <div className="brandLine"><strong>Giám sát AIBOX</strong><span /><em>{activeView === "dashboard" ? "Tổng quan vận hành" : activeView === "connectivity" ? "Lịch sử kết nối" : activeView === "tv" ? "Màn hình TV" : activeView === "timelapse" ? "Timelapse" : "Chi tiết thiết bị"}</em></div>
           <div className="topTools">
             <div className={`topStatus ${updateState}`}><span />{updateLabel}</div>
             <div className="topUpdated" title={formatGeneratedAt(data.generatedAt)}>Cập nhật {formatDataAge(data.generatedAt, now)}</div>
@@ -3168,14 +3464,9 @@ function App() {
                           <div className="networkStatusMini" aria-label={`${networkSummary.online || 0} kết nối, ${networkSummary.offline || 0} mất kết nối, ${networkSummary.unknown || 0} chưa rõ, tổng ${network.cameras.length} camera`}><span className="good"><strong>{networkSummary.online || 0}</strong><small>kết nối</small></span><span className="bad"><strong>{networkSummary.offline || 0}</strong><small>mất</small></span><span className="unknown"><strong>{networkSummary.unknown || 0}</strong><small>chưa rõ</small></span><span className="total"><strong>{network.cameras.length}</strong><small>tổng</small></span></div>
                         </header>
                         <NetworkMonitorHealth network={network} now={now} onFocus={focusDashboard} />
-                        <NetworkCameraGrid cameras={network.cameras} columns={fit.columns || 3} label={network.name} networkId={network.id} render={(camera) => {
-                           const tile = cameraTileLabel(camera);
-                           return (
-                                <article aria-label={`${camera.name}, IP ${camera.ip}, ${statusLabel(camera.status)}, ${camera.method === "image" ? "kiểm tra hình ảnh" : camera.method === "ping-fallback" ? "ping dự phòng" : camera.method === "ping" ? "kiểm tra ping" : "chưa thể kiểm tra"}`} className={`networkCameraTile ${camera.status}`} key={`${network.id}-${camera.ip}`} title={`${camera.name} · ${camera.ip} · ${camera.method === "image" ? "Kiểm tra hình ảnh" : camera.method === "ping-fallback" ? "Ping dự phòng" : camera.method === "ping" ? "Kiểm tra ping" : "Chưa thể kiểm tra"}`}>
-                                  <StatusSymbol status={camera.status} /><RollingName className={tile.isIp ? "cameraIp mono" : "cameraName"} name={tile.label} /><small aria-label={camera.method === "image" ? "Kiểm tra hình ảnh" : camera.method === "ping-fallback" ? "Ping dự phòng" : camera.method === "ping" ? "Kiểm tra ping" : "Chưa thể kiểm tra"} className={`cameraMethod ${camera.method === "image" ? "image" : camera.method === "unknown" ? "unknown" : "ping"}`}>{camera.method === "image" ? "ẢNH" : camera.method === "ping-fallback" ? "PING*" : camera.method === "ping" ? "PING" : "—"}</small>{camera.quality === "lagging" ? <small aria-label="Trễ" className="cameraMethod lag" title={`Trễ (${camera.valid}/${camera.validTotal} khung hình hợp lệ)`}>TRỄ</small> : null}{typeof camera.availability === "number" ? <small className="tileAvailability" title="Tỷ lệ thời gian kết nối">{formatAvailability(camera.availability)}</small> : null}
-                           </article>
-                           );
-                        }} />
+                        <NetworkCameraGrid cameras={network.cameras} columns={fit.columns || 3} label={network.name} networkId={network.id} render={(camera) => (
+                          <CameraPill camera={camera} key={`${network.id}-${camera.ip}`} network={network} onHoverChange={handlePreviewOpenChange} theme={theme} />
+                        )} />
                       </article>
                     );
                   }}
@@ -3185,6 +3476,8 @@ function App() {
             </section> : null}
             </div>
           </div>
+        ) : activeView === "timelapse" ? (
+          <TimelapseView networks={timelapseNetworks} />
         ) : activeView === "fleet" ? (
           <div className={`container-xxl fleetDetailView ${desktopFleet ? "desktopFleet" : "flowFleet"}`}>
             <section className="hero controlDeck fleetCommandBand">

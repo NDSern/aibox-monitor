@@ -1,5 +1,5 @@
 const SITES = [
-  { id: "mxa", label: "MXA" },
+  { id: "mxa", label: "Mỹ Xuân A" },
   { id: "giaminh", label: "Gia Minh" },
   { id: "ships", label: "Tàu" },
   { id: "other", label: "VNPost" },
@@ -64,6 +64,89 @@ export function buildTvOfflineNetworks(data) {
     };
   }).filter((network) => network.offline)
     .sort((a, b) => (Date.parse(a.statusSince) || Infinity) - (Date.parse(b.statusSince) || Infinity));
+}
+
+const OFFLINE_REASONS = [
+  { id: "power", label: "Mất nguồn" },
+  { id: "network", label: "Mất mạng" },
+  { id: "unknown", label: "Chưa rõ" },
+];
+
+function checkerUnavailable(network) {
+  const monitors = Array.isArray(network.monitorAiboxes) ? network.monitorAiboxes : [];
+  if (monitors.length) return monitors.every((box) => box && box.status !== "online");
+  return network.monitorStatus === "offline";
+}
+
+// Group offline cameras by plausible cause. Each camera is counted at most
+// once; stale capture evidence is not an offline cause, so it is omitted.
+export function offlineReasonId(camera, checkerDown) {
+  if (!camera || camera.status === "online") return null;
+  // The checker reached the camera but got no frame: power, not network.
+  if (camera.status === "image_unavailable") return "power";
+  // Stale/unknown capture evidence is not a cause.
+  if (camera.method === "image_capture") return null;
+  // The checker answered but its camera LAN route was down, so the camera was
+  // never observed: that is a network fault, not a power fault.
+  if (camera.method === "lan-down") return "network";
+  // A blind checker cannot distinguish causes, so the network is the suspect.
+  if (checkerDown) return "network";
+  if (camera.method === "image") return "power";
+  if (camera.status === "offline") return "network";
+  return "unknown";
+}
+export function buildTvOfflineReasons(data) {
+  const networks = Array.isArray(data.networks) ? data.networks : [];
+  const reasons = new Map(OFFLINE_REASONS.map((reason) => [reason.id, {
+    ...reason, count: 0, sites: new Map(),
+  }]));
+
+  networks.forEach((network) => {
+    const siteId = classifyText(`${network.id || ""} ${network.name || ""}`);
+    const siteLabel = SITES.find((site) => site.id === siteId)?.label || "VNPost";
+    const checkerDown = checkerUnavailable(network);
+    const cameras = Array.isArray(network.cameras) ? network.cameras : [];
+    cameras.forEach((camera) => {
+      if (!camera || camera.status === "online") return;
+      if (camera.method === "image_capture" && camera.status !== "image_unavailable") return;
+      const reasonId = offlineReasonId(camera, checkerDown);
+      const reason = reasons.get(reasonId);
+      reason.count += 1;
+      reason.sites.set(siteLabel, (reason.sites.get(siteLabel) || 0) + 1);
+    });
+  });
+
+  return [...reasons.values()]
+    .filter((reason) => reason.count > 0)
+    .map((reason) => ({
+      id: reason.id,
+      label: reason.label,
+      count: reason.count,
+      sites: [...SITES.map((site) => site.label), "VNPost"]
+        .filter((label, index, labels) => labels.indexOf(label) === index && reason.sites.has(label))
+        .map((label) => ({ label, count: reason.sites.get(label) })),
+    }));
+}
+
+// AIBOX offline causes, from boot evidence collected after the box came back.
+// A box that is down right now has no evidence yet, so it stays "unknown"
+// until it reconnects and the probe can read its boot session.
+export function buildAiboxOfflineReasons(data) {
+  const networks = Array.isArray(data.networks) ? data.networks : [];
+  const aiboxes = Array.isArray(data.aiboxes) ? data.aiboxes : [];
+  const networkLookup = new Map(networks.map((network) => [network.id, network]));
+  const bySite = new Map();
+  aiboxes.forEach((box) => {
+    if (!box || box.status === "online") return;
+    const site = aiboxSite(box, networkLookup);
+    const label = SITES.find((item) => item.id === site)?.label || "VNPost";
+    const cause = box.boot && box.boot.lastOutageCause;
+    const key = cause === "power" || cause === "network" ? cause : "unknown";
+    const entry = bySite.get(label) || { power: 0, network: 0, unknown: 0 };
+    entry[key] += 1;
+    bySite.set(label, entry);
+  });
+  return bySite;
 }
 
 export function buildTvGroups(data) {

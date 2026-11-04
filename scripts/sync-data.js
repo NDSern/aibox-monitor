@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
+const { buildOfflineReasonCounts } = require("./tv-reasons.cjs");
 
 const monitorRoot = process.env.AIBOX_MONITOR_ROOT || path.join(process.env.HOME, "aibox-monitor");
 const configPath = path.join(monitorRoot, "config.json");
@@ -9,6 +10,7 @@ const dataDir = path.join(__dirname, "..", "data");
 const historyPath = path.join(dataDir, "status-history.json");
 const notifyStatePath = path.join(dataDir, "aibox-notify-state.json");
 const availabilityPath = path.join(dataDir, "availability-history.json");
+const bootHistoryPath = path.join(dataDir, "aibox-boot-history.json");
 const publicPath = path.join(__dirname, "..", "public", "aibox-data.json");
 const distPath = path.join(__dirname, "..", "dist", "aibox-data.json");
 const tailBytes = 1024 * 1024 * 2;
@@ -290,8 +292,29 @@ function applyAvailability(payload, generatedAt) {
     }
   }
   store.updatedAt = generatedAt;
+  store.reasonHistory = recordReasonSnapshot(store.reasonHistory, payload.networks, nowMs);
   writeJsonAtomic(availabilityPath, store);
   return store;
+}
+
+const reasonHistoryWindowMs = 25 * 60 * 60 * 1000;
+
+// Persist one reason snapshot per clock hour. The TV graph forward-fills each
+// hourly bucket from the newest snapshot at or before its end, so a bucket
+// that was never sampled keeps the last known reason split instead of
+// silently reporting zero offline cameras.
+function recordReasonSnapshot(history, networks, nowMs) {
+  const hourMs = 60 * 60 * 1000;
+  const hour = new Date(Math.floor(nowMs / hourMs) * hourMs).toISOString();
+  const counts = buildOfflineReasonCounts(networks);
+  const next = (Array.isArray(history) ? history : [])
+    .filter((entry) => entry && isValidTime(entry.hour) && new Date(entry.hour).getTime() >= nowMs - reasonHistoryWindowMs);
+  const existing = next.find((entry) => entry.hour === hour);
+  const record = { hour, at: new Date(nowMs).toISOString(), ...counts };
+  if (existing) Object.assign(existing, record);
+  else next.push(record);
+  next.sort((a, b) => new Date(a.hour).getTime() - new Date(b.hour).getTime());
+  return next;
 }
 
 function readLogTail(filePath, maxBytes) {
@@ -340,7 +363,7 @@ const CAMERA_LAG_MINIMUM = 5;
 function updateTargetStatus(statuses, ip, event) {
   const current = statuses[ip];
   if (event.status === "unknown") {
-    statuses[ip] = { ...(current || {}), status: "unknown", method: "unknown" };
+    statuses[ip] = { ...(current || {}), status: "unknown", method: event.method === "lan-down" ? "lan-down" : "unknown" };
     return;
   }
   const reset = event.reset || !current || (current.status !== event.status && event.status !== "unknown");
@@ -376,6 +399,8 @@ function parseTargetStatusLine(line) {
   const valid = validMatch ? { valid: Number(validMatch[1]), validTotal: Number(validMatch[2]) } : {};
   let match = line.match(/(Initial target state|Target unchanged) from (.*?): .*?\(([^)]+)\) is (online|offline)(?: \[method=([^\]]+)\])?/);
   if (match) return { scopeName: match[2], ip: match[3], status: match[4], method: match[5] || "ping", ...valid, at: timestamp, reset: false };
+  match = line.match(/Target state unknown from (.*?): .*?\(([^)]+)\)\s*\[method=([^\]]+)\]/);
+  if (match) return { scopeName: match[1], ip: match[2], status: "unknown", method: match[3] || "unknown", at: timestamp, reset: false };
   match = line.match(/Target state unknown from (.*?): .*?\(([^)]+)\)/);
   if (match) return { scopeName: match[1], ip: match[2], status: "unknown", method: "unknown", at: timestamp, reset: false };
   match = line.match(/Target offline from (.*?): .*?\(([^)]+)\)/);
@@ -398,6 +423,10 @@ function parseScopeStatusLine(line, scopeIds) {
   match = line.match(/Target checks unavailable from (.*?): no checker available$/);
   if (match && scopeIds[match[1]]) {
     return { id: scopeIds[match[1]], status: "unknown", at: timestamp, reset: false, complete: true };
+  }
+  match = line.match(/Target checks unavailable from (.*?): target LAN unavailable$/);
+  if (match && scopeIds[match[1]]) {
+    return { id: scopeIds[match[1]], status: "unknown", method: "lan-down", at: timestamp, reset: false, complete: true };
   }
   const targetEvent = parseTargetStatusLine(line);
   if (targetEvent && targetEvent.status !== "unknown" && scopeIds[targetEvent.scopeName]) {
@@ -489,7 +518,11 @@ function buildStatusHistory(config) {
   const aiboxes = mergeStatusCache(latest.aiboxes, history.aiboxes);
   const targets = mergeStatusCache(latest.targets, history.targets);
   for (const [key, event] of Object.entries(latest.targets)) {
-    if (event.status === "unknown" && targets[key]) targets[key] = { ...targets[key], status: "unknown", method: "unknown" };
+    if (event.status === "unknown" && targets[key]) {
+      // Keep the LAN-down cause so the dashboard can report Mất mạng instead of
+      // collapsing every unseen camera into Chưa rõ.
+      targets[key] = { ...targets[key], status: "unknown", method: event.method === "lan-down" ? "lan-down" : "unknown" };
+    }
   }
   const scopes = mergeStatusCache(latest.scopes, history.scopes);
   const activeAiboxIps = new Set((config.aiboxes || []).map((box) => box.ip));
@@ -591,7 +624,23 @@ const TV_EVENT_LIMIT = 40;
 const TV_CHANGE_WINDOW_MS = 24 * 60 * 60 * 1000;
 const TV_STATUS_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-function buildTvEventData(store, payload, config, nowMs) {
+function reasonSnapshotAt(history, endMs) {
+  const entries = Array.isArray(history) ? history : [];
+  let chosen = null;
+  for (const entry of entries) {
+    if (!entry || !isValidTime(entry.hour)) continue;
+    if (new Date(entry.hour).getTime() > endMs) continue;
+    if (!chosen || new Date(entry.hour).getTime() > new Date(chosen.hour).getTime()) chosen = entry;
+  }
+  if (!chosen) return null;
+  return {
+    cameraPower: Number.isFinite(chosen.power) ? chosen.power : 0,
+    cameraNetwork: Number.isFinite(chosen.network) ? chosen.network : 0,
+    cameraUnknown: Number.isFinite(chosen.unknown) ? chosen.unknown : 0,
+  };
+}
+
+function buildTvEventData(store, payload, config, nowMs, bootOutages = {}) {
   const aiboxNames = new Map((config.aiboxes || []).map((box) => [box.ip, box.name]));
   const activeAiboxes = new Set((payload.aiboxes || []).map((box) => box.ip));
   const scopeById = new Map((config.target_scopes || []).map((scope) => [scope.id, scope]));
@@ -606,7 +655,7 @@ function buildTvEventData(store, payload, config, nowMs) {
   for (const [ip, entry] of Object.entries((store && store.aiboxes) || {})) {
     if (!activeAiboxes.has(ip)) continue;
     const normalized = normalizeAvailabilityEvents(entry && entry.events);
-    timelines.push({ kind: "aibox", events: normalized });
+    timelines.push({ kind: "aibox", ip, events: normalized });
     normalized.forEach((event, index) => {
       if (new Date(event.at).getTime() > nowMs) return;
       events.push({ at: event.at, kind: "aibox", change: event.status === "offline" ? "offline" : "online",
@@ -650,18 +699,80 @@ function buildTvEventData(store, payload, config, nowMs) {
       aiboxes: changed.aibox.size, cameras: changed.camera.size },
     statusSeries: buckets.map(({ from, to }) => {
       const endMs = new Date(to).getTime();
-      const point = { from, to, aiboxOnline: 0, aiboxOffline: 0, cameraOnline: 0, cameraOffline: 0 };
+      const point = { from, to, aiboxOnline: 0, aiboxOffline: 0, aiboxPower: 0, aiboxNetwork: 0, aiboxUnknown: 0, cameraOnline: 0, cameraOffline: 0 };
       for (const timeline of timelines) {
         let status = null;
         for (const event of timeline.events) {
           if (new Date(event.at).getTime() > endMs) break;
           status = event.status;
         }
-        if (status) point[`${timeline.kind}${status === "online" ? "Online" : "Offline"}`] += 1;
+        if (!status) continue;
+        point[`${timeline.kind}${status === "online" ? "Online" : "Offline"}`] += 1;
+        if (timeline.kind === "aibox" && status !== "online") {
+          const cause = aiboxCauseAt(bootOutages[timeline.ip], endMs);
+          point[cause === "power" ? "aiboxPower" : cause === "network" ? "aiboxNetwork" : "aiboxUnknown"] += 1;
+        }
       }
-      return point;
+      const snapshot = reasonSnapshotAt(store && store.reasonHistory, endMs);
+      return snapshot ? { ...point, ...snapshot } : point;
     }),
   };
+}
+
+// Boot evidence collected centrally by aibox-boot-probe.py. An outage is
+// classified only after the box is reachable again: a new boot session means
+// it lost power, an uninterrupted boot session means it kept running and only
+// the link failed. Missing evidence stays "unknown" rather than guessing.
+// Full outage lists, used to attribute each historical bucket to the cause
+// of the outage that was actually active in that hour.
+function loadAiboxBootOutages() {
+  const store = readJsonSafe(bootHistoryPath, { devices: {} });
+  const result = {};
+  for (const [ip, entry] of Object.entries(store.devices || {})) {
+    if (!entry || typeof entry !== "object") continue;
+    result[ip] = Array.isArray(entry.outages) ? entry.outages.filter((item) => item && item.startedAt) : [];
+  }
+  return result;
+}
+
+// Cause of the AIBOX outage covering a moment. An outage still in progress has
+// no verdict yet, so it stays "unknown" until the box returns and the probe can
+// compare boot sessions.
+function aiboxCauseAt(outages, atMs) {
+  let chosen = null;
+  let chosenStart = -Infinity;
+  for (const outage of outages || []) {
+    const start = Date.parse(outage.startedAt);
+    if (!Number.isFinite(start) || start > atMs) continue;
+    const end = outage.endedAt ? Date.parse(outage.endedAt) : Infinity;
+    if (Number.isFinite(end) && end < atMs) continue;
+    if (start >= chosenStart) {
+      chosen = outage;
+      chosenStart = start;
+    }
+  }
+  if (!chosen) return "unknown";
+  return chosen.cause === "power" || chosen.cause === "network" ? chosen.cause : "unknown";
+}
+
+function loadAiboxBootHistory() {
+  const store = readJsonSafe(bootHistoryPath, { devices: {} });
+  const devices = store.devices || {};
+  const result = {};
+  for (const [ip, entry] of Object.entries(devices)) {
+    if (!entry || typeof entry !== "object") continue;
+    const outages = Array.isArray(entry.outages) ? entry.outages : [];
+    const classified = outages.filter((item) => item && item.cause);
+    const latest = classified.length ? classified[classified.length - 1] : null;
+    result[ip] = {
+      bootAt: entry.bootAt || null,
+      reachable: Boolean(entry.reachable),
+      lastOutageCause: latest ? latest.cause : null,
+      lastOutageAt: latest ? latest.endedAt || latest.startedAt || null : null,
+      openOutageSince: entry.openOutage && entry.openOutage.startedAt ? entry.openOutage.startedAt : null,
+    };
+  }
+  return result;
 }
 
 function normalize(config) {
@@ -672,6 +783,8 @@ function normalize(config) {
   const groups = config.recipient_groups || {};
   const defaultGroup = config.default_status_recipient_group || "aibox_report";
   const defaultRecipients = config.default_recipients || [];
+  const bootHistory = loadAiboxBootHistory();
+  const bootOutages = loadAiboxBootOutages();
   const history = buildStatusHistory(config);
   const targetStatuses = history.targets;
   const scopeStatuses = history.scopes;
@@ -697,6 +810,7 @@ function normalize(config) {
         monitors: groups[group] || [],
         status: statuses[box.ip] ? statuses[box.ip].status : "unknown",
         statusSince: statuses[box.ip] ? statuses[box.ip].statusSince : null,
+        ...(bootHistory[box.ip] ? { boot: bootHistory[box.ip] } : {}),
       };
     }),
     networks: (config.target_scopes || []).filter((scope) => enabledNetworkIds.has(scope.id)).map((scope) => {
@@ -729,7 +843,7 @@ function normalize(config) {
     }),
   };
   const availabilityStore = applyAvailability(payload, generatedAt);
-  Object.assign(payload, buildTvEventData(availabilityStore, payload, config, new Date(generatedAt).getTime()));
+  Object.assign(payload, buildTvEventData(availabilityStore, payload, config, new Date(generatedAt).getTime(), bootOutages));
   return payload;
 }
 

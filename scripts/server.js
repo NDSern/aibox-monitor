@@ -360,6 +360,119 @@ function serveData(req, res) {
 
 const SNAPSHOT_REQUEST_RE = /^([a-z0-9-]+)\/(\d{1,3}(?:\.\d{1,3}){3})(?:\.(\d+))?\.jpg$/i;
 
+const ARCHIVE_FRAME_RE = /^sub-(\d+)-ok\.jpg$/;
+const ARCHIVE_SCOPE_RE = /^[a-z0-9-]+$/;
+const ARCHIVE_IP_RE = /^\d{1,3}(?:\.\d{1,3}){3}$/;
+const ARCHIVE_FILE_RE = /^([a-z0-9-]+)\/(\d{1,3}(?:\.\d{1,3}){3})\/(sub-\d+-ok\.jpg)$/;
+
+function archiveDir() {
+  return path.join(dataDir, "camera-archive");
+}
+
+// List the frames a camera actually has, oldest first, so the timeline shows
+// real availability instead of assuming a fixed history depth.
+function serveArchiveInventory(req, res) {
+  // Cameras discovered locally on boxes that were offline during rollout. Absent
+  // file simply means nothing has been discovered yet.
+  const file = path.join(dataDir, "camera-archive-inventory.json");
+  let body;
+  try {
+    body = fs.readFileSync(file);
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      sendJson(res, 200, { generated_at: null, scopes: {} });
+      return;
+    }
+    throw error;
+  }
+  if (req.method === "HEAD") {
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+    res.end();
+    return;
+  }
+  res.writeHead(200, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Content-Length": body.length,
+    "Cache-Control": "no-store",
+  });
+  res.end(body);
+}
+
+function serveArchiveIndex(req, res, pathname) {
+  const parts = pathname.replace(/^\/camera-archive\//, "").split("/").filter(Boolean);
+  if (parts.length !== 2 || !ARCHIVE_SCOPE_RE.test(parts[0]) || !ARCHIVE_IP_RE.test(parts[1])) {
+    sendError(res, 404, "Archive not found");
+    return;
+  }
+  const root = archiveDir();
+  const cameraDir = path.resolve(root, parts[0], parts[1]);
+  if (!cameraDir.startsWith(root + path.sep)) {
+    sendError(res, 404, "Archive not found");
+    return;
+  }
+  let names = [];
+  try {
+    names = fs.readdirSync(cameraDir).filter((name) => ARCHIVE_FRAME_RE.test(name));
+  } catch (_) {
+    sendJson(res, 200, { scope: parts[0], camera: parts[1], frames: [] });
+    return;
+  }
+  const frames = names.map((name) => {
+    // Filename nanos are the capture time: sub-<ns>-ok.jpg
+    const epoch = Number(ARCHIVE_FRAME_RE.exec(name)[1]) / 1e9;
+    return { epoch, source: name };
+  }).filter((frame) => Number.isFinite(frame.epoch))
+    .sort((a, b) => a.epoch - b.epoch);
+  reportArchiveIndex(res, parts, frames);
+}
+
+function reportArchiveIndex(res, parts, frames) {
+  sendJson(res, 200, {
+    scope: parts[0],
+    camera: parts[1],
+    count: frames.length,
+    oldest: frames.length ? frames[0].epoch : null,
+    newest: frames.length ? frames[frames.length - 1].epoch : null,
+    frames,
+  });
+}
+
+// Frames are addressed by their own filename, which encodes the capture time,
+// so a URL always resolves to the same image even after retention prunes
+// older frames.
+function serveArchiveFrame(req, res, pathname) {
+  const match = pathname.replace(/^\/camera-archive\//, "").match(ARCHIVE_FILE_RE);
+  if (!match) {
+    sendError(res, 404, "Archive frame not found");
+    return;
+  }
+  const root = archiveDir();
+  const cameraDir = path.resolve(root, match[1], match[2]);
+  if (!cameraDir.startsWith(root + path.sep)) {
+    sendError(res, 404, "Archive frame not found");
+    return;
+  }
+  serveArchiveFile(req, res, path.join(cameraDir, match[3]));
+}
+
+function serveArchiveFile(req, res, filePath) {
+  res.writeHead(200, {
+    ...securityHeaders,
+    "Cache-Control": "public, max-age=86400, immutable",
+    "Content-Type": "image/jpeg",
+  });
+  if (req.method === "HEAD") {
+    res.end();
+    return;
+  }
+  const stream = fs.createReadStream(filePath);
+  stream.on("open", () => stream.pipe(res));
+  stream.on("error", () => {
+    if (!res.headersSent) sendError(res, 500, "Unable to read archive frame");
+    else res.destroy();
+  });
+}
+
 function serveCameraSnapshot(req, res, pathname) {
   const match = pathname.replace(/^\/camera-snapshots\//, "").match(SNAPSHOT_REQUEST_RE);
   if (!match) {
@@ -780,6 +893,21 @@ function handleRequest(req, res) {
 
   if ((req.method === "GET" || req.method === "HEAD") && parsed.pathname.startsWith("/camera-snapshots/")) {
     serveCameraSnapshot(req, res, parsed.pathname);
+    return;
+  }
+
+  if ((req.method === "GET" || req.method === "HEAD") && parsed.pathname === "/camera-archive-inventory.json") {
+    serveArchiveInventory(req, res);
+    return;
+  }
+
+  if ((req.method === "GET" || req.method === "HEAD") && /^\/camera-archive\/[^/]+\/[^/]+$/.test(parsed.pathname)) {
+    serveArchiveIndex(req, res, parsed.pathname);
+    return;
+  }
+
+  if ((req.method === "GET" || req.method === "HEAD") && parsed.pathname.startsWith("/camera-archive/")) {
+    serveArchiveFrame(req, res, parsed.pathname);
     return;
   }
 
