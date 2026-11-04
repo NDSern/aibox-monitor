@@ -140,7 +140,9 @@ export function buildAiboxOfflineReasons(data) {
     if (!box || box.status === "online") return;
     const site = aiboxSite(box, networkLookup);
     const label = SITES.find((item) => item.id === site)?.label || "VNPost";
-    const cause = box.boot && box.boot.lastOutageCause;
+    // Only a cause that still describes the present outage may be shown. A
+    // cause from an older, already-closed outage is history, not current state.
+    const cause = box.boot && (box.boot.currentCause ?? box.boot.lastOutageCause);
     const key = cause === "power" || cause === "network" ? cause : "unknown";
     const entry = bySite.get(label) || { power: 0, network: 0, unknown: 0 };
     entry[key] += 1;

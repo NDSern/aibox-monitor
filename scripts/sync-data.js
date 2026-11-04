@@ -744,8 +744,15 @@ function aiboxCauseAt(outages, atMs) {
   for (const outage of outages || []) {
     const start = Date.parse(outage.startedAt);
     if (!Number.isFinite(start) || start > atMs) continue;
-    const end = outage.endedAt ? Date.parse(outage.endedAt) : Infinity;
-    if (Number.isFinite(end) && end < atMs) continue;
+    // A malformed end must not be read as "still open": that would let a
+    // corrupt record claim every later instant.
+    let end = Infinity;
+    if (outage.endedAt) {
+      end = Date.parse(outage.endedAt);
+      if (!Number.isFinite(end)) continue;
+      if (end < atMs) continue;
+    }
+    if (end <= start) continue;
     if (start >= chosenStart) {
       chosen = outage;
       chosenStart = start;
@@ -762,14 +769,27 @@ function loadAiboxBootHistory() {
   for (const [ip, entry] of Object.entries(devices)) {
     if (!entry || typeof entry !== "object") continue;
     const outages = Array.isArray(entry.outages) ? entry.outages : [];
-    const classified = outages.filter((item) => item && item.cause);
-    const latest = classified.length ? classified[classified.length - 1] : null;
+    const valid = outages.filter((item) => {
+      if (!item || !item.cause) return false;
+      const started = Date.parse(item.startedAt);
+      const ended = Date.parse(item.endedAt);
+      // A window that cannot be reasoned about must not carry a cause.
+      return Number.isFinite(started) && Number.isFinite(ended) && ended > started;
+    });
+    const latest = valid.length ? valid[valid.length - 1] : null;
+    const openSince = entry.openOutage && entry.openOutage.startedAt ? entry.openOutage.startedAt : null;
+    const lastEndedMs = latest ? Date.parse(latest.endedAt) : null;
+    const openMs = openSince ? Date.parse(openSince) : null;
+    // A cause explains the outage it belongs to, not a later one. If a new
+    // outage started after that one closed, the old verdict is history only.
+    const stale = Number.isFinite(openMs) && Number.isFinite(lastEndedMs) && openMs >= lastEndedMs;
     result[ip] = {
       bootAt: entry.bootAt || null,
       reachable: Boolean(entry.reachable),
       lastOutageCause: latest ? latest.cause : null,
       lastOutageAt: latest ? latest.endedAt || latest.startedAt || null : null,
-      openOutageSince: entry.openOutage && entry.openOutage.startedAt ? entry.openOutage.startedAt : null,
+      openOutageSince: openSince,
+      currentCause: stale ? null : latest ? latest.cause : null,
     };
   }
   return result;
