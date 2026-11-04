@@ -1772,8 +1772,8 @@ function TvTrendChart({ id, label, lines, points, emptyNote }) {
         {ticks.map((index) => <text className="tvChartAxis" key={index} x={x(index)} y={size.height - 4} textAnchor="middle">{tvTime(points[index].to, { hour: "2-digit", minute: "2-digit", hour12: false })}</text>)}
         {lines.map((line) => <g className={line.className} key={line.key}>
           {segmentsFor(line.key).map((segment) => segment.points.length === 1
-            ? <circle className="tvChartLine" key={segment.key} cx={x(segment.points[0].index)} cy={y(segment.points[0].value)} r="2.5" fill="currentColor" />
-            : <polyline className="tvChartLine" key={segment.key} points={segment.points.map(({ index, value }) => `${x(index)},${y(value)}`).join(" ")} fill="none" strokeWidth="2.5" />)}
+            ? <circle className={`tvChartLine ${line.className}`} key={segment.key} cx={x(segment.points[0].index)} cy={y(segment.points[0].value)} r="2.5" fill="currentColor" />
+            : <polyline className={`tvChartLine ${line.className}`} key={segment.key} points={segment.points.map(({ index, value }) => `${x(index)},${y(value)}`).join(" ")} fill="none" strokeWidth="2.5" />)}
         </g>)}
       </svg></div>
       <table className="visually-hidden"><caption>{`Số ${label.toLowerCase()} mất kết nối vào cuối mỗi giờ`}</caption><thead><tr><th scope="col">Thời điểm</th>{lines.map((line) => <th key={line.key} scope="col">{line.label}</th>)}</tr></thead><tbody>{points.map((point) => <tr key={point.from}><th scope="row">{formatGeneratedAt(point.to)}</th>{lines.map((line) => <td key={line.key}>{point[line.key] || 0}</td>)}</tr>)}</tbody></table>
