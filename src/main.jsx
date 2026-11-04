@@ -1659,11 +1659,28 @@ function TvDeviceSummary({ label, summary, unknownLabel, footer, causes, allOnli
   // than a legend of zeroes. Empty groups are not "all online".
   const healthy = allOnline && summary.total > 0 && summary.online === summary.total && !summary.offline && !summary.unknown;
   const name = (status) => status === "unknown" ? unknownLabel : statusLabel(status);
-  const segments = (unknownLabel ? ["online", "offline", "unknown"] : ["online", "offline"]).map((status) => {
-    const length = summary.total ? summary[status] / summary.total * 100 : 0;
-    const segment = { status, length, offset };
+  // When outage causes are known, the ring splits the non-online arc the same
+  // way the legend does, instead of painting it all as one red block. Devices
+  // the cause rules did not attribute stay "Chưa rõ", so the ring still adds up
+  // to the total printed inside it.
+  const resolvedCauses = causes ? causes.map((cause) => ({ ...cause })) : null;
+  if (resolvedCauses) {
+    const attributed = resolvedCauses.reduce((sum, cause) => sum + cause.count, 0);
+    const remainder = summary.total - summary.online - attributed;
+    if (remainder > 0) {
+      const unknown = resolvedCauses.find((cause) => cause.key === "unknown");
+      if (unknown) unknown.count += remainder;
+      else resolvedCauses.push({ key: "unknown", label: "Chưa rõ", count: remainder });
+    }
+  }
+  const ring = resolvedCauses
+    ? [{ status: "online", count: summary.online }, ...resolvedCauses.map((cause) => ({ status: cause.key, count: cause.count }))]
+    : (unknownLabel ? ["online", "offline", "unknown"] : ["online", "offline"]).map((status) => ({ status, count: summary[status] }));
+  const segments = ring.filter((segment) => segment.count > 0).map((segment) => {
+    const length = summary.total ? segment.count / summary.total * 100 : 0;
+    const item = { status: segment.status, count: segment.count, length, offset };
     offset += length;
-    return segment;
+    return item;
   });
   return (
     <div className="tvDeviceSummary">
@@ -1676,9 +1693,9 @@ function TvDeviceSummary({ label, summary, unknownLabel, footer, causes, allOnli
       <div className="tvDonutInfo">
         {healthy ? (
           <p className="tvAllOnline">ALL ONLINE</p>
-        ) : causes ? (
+        ) : resolvedCauses ? (
           <dl className="tvCauseLegend">
-            {causes.map((cause) => (
+            {resolvedCauses.map((cause) => (
               <div key={cause.key}><dt><i aria-hidden="true" className={cause.key} />{cause.label}</dt><dd>{cause.count}</dd></div>
             ))}
           </dl>

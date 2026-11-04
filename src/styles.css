@@ -5638,6 +5638,10 @@ h3 { font-size: clamp(1.2rem, 2vw, 1.55rem); font-weight: 780; margin: 0 0 0.25r
 .tvDonutSegment.online { stroke: var(--tv-good); }
 .tvDonutSegment.offline { stroke: var(--tv-bad); }
 .tvDonutSegment.unknown { stroke: var(--tv-unknown); }
+/* Outage causes share the ring with online, using the same colours as the
+   cause legend and the historical charts. */
+.tvDonutSegment.power { stroke: var(--tv-bad); }
+.tvDonutSegment.network { stroke: var(--tv-warn); }
 .tvDonutTotal { fill: var(--tv-text); font-size: 22px; font-variant-numeric: tabular-nums; font-weight: 500; }
 .tvDonutLabel { fill: var(--tv-secondary); font-size: 10px; }
 .tvDonutInfo { min-width: 0; }
