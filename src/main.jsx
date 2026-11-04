@@ -2576,15 +2576,28 @@ function App() {
   editingRef.current = Boolean(activeNote || activeConfig);
 
   useEffect(() => {
-    const current = document.querySelector('script[type="module"][src*="/assets/index."]')?.getAttribute("src");
-    if (!current) return undefined;
+    // Track every hashed asset, not just the script: a release that changes
+    // only CSS keeps the same script name, and comparing scripts alone would
+    // leave open tabs on the old stylesheet.
+    const current = {
+      js: document.querySelector('script[type="module"][src*="/assets/index."]')?.getAttribute("src"),
+      css: document.querySelector('link[rel="stylesheet"][href*="/assets/index."]')?.getAttribute("href"),
+    };
+    if (!current.js) return undefined;
 
     async function checkBuild() {
       try {
         const response = await fetch(`/?t=${Date.now()}`, { cache: "no-store" });
         if (!response.ok) return;
-        const latest = (await response.text()).match(/src="(\/assets\/index\.[^"]+\.js)"/)?.[1];
-        if (latest && latest !== current && !editingRef.current) window.location.reload();
+        const html = await response.text();
+        const latest = {
+          js: html.match(/src="(\/assets\/index\.[^"]+\.js)"/)?.[1],
+          css: html.match(/href="(\/assets\/index\.[^"]+\.css)"/)?.[1],
+        };
+        const changed =
+          (latest.js && latest.js !== current.js) ||
+          (latest.css && latest.css !== current.css);
+        if (changed && !editingRef.current) window.location.reload();
       } catch (_) {
         // Server unreachable; try again on the next interval.
       }
