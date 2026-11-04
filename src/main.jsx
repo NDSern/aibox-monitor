@@ -1695,7 +1695,8 @@ function TvDeviceSummary({ label, summary, unknownLabel, footer, causes, allOnli
           <p className="tvAllOnline">ALL ONLINE</p>
         ) : resolvedCauses ? (
           <dl className="tvCauseLegend">
-            {resolvedCauses.map((cause) => (
+            {/* Only causes that actually occurred; a zero is noise beside the ring. */}
+            {resolvedCauses.filter((cause) => cause.count > 0).map((cause) => (
               <div key={cause.key}><dt><i aria-hidden="true" className={cause.key} />{cause.label}</dt><dd>{cause.count}</dd></div>
             ))}
           </dl>
