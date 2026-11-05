@@ -142,7 +142,14 @@ export function buildAiboxOfflineReasons(data) {
     const label = SITES.find((item) => item.id === site)?.label || "VNPost";
     // Only a cause that still describes the present outage may be shown. A
     // cause from an older, already-closed outage is history, not current state.
-    const cause = box.boot && (box.boot.currentCause ?? box.boot.lastOutageCause);
+    // `currentCause` is explicitly null when the verdict is stale, so a null
+    // must NOT fall back to lastOutageCause: `??` would resurrect the old cause
+    // and label an unknown outage with it. Fall back only when the field was
+    // never written at all.
+    const boot = box.boot || {};
+    const cause = boot.currentCause === undefined
+      ? boot.lastOutageCause
+      : boot.currentCause;
     const key = cause === "power" || cause === "network" ? cause : "unknown";
     const entry = bySite.get(label) || { power: 0, network: 0, unknown: 0 };
     entry[key] += 1;
