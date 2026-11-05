@@ -35,7 +35,7 @@ import "@fontsource-variable/ibm-plex-sans";
 import "bootstrap/dist/css/bootstrap.min.css";
 import "./styles.css";
 import { loadDeviceOrder, moveDevice, orderDevices, saveDeviceOrder } from "./device-order.mjs";
-import { buildAiboxOfflineReasons, buildTvGroups, buildTvOfflineNetworks, buildTvOfflineReasons, buildTvSiteLabels } from "./tv-groups.mjs";
+import { buildTvGroups, buildTvOfflineNetworks, buildTvOfflineReasons, buildTvSiteLabels } from "./tv-groups.mjs";
 import TimelapseView from "./TimelapseView.jsx";
 import { mergeArchiveInventory } from "./timelapse-inventory.js";
 
@@ -1653,7 +1653,7 @@ function tvTime(at, options) {
   return at != null && Number.isFinite(date.getTime()) ? date.toLocaleTimeString("vi-VN", options) : "—";
 }
 
-function TvDeviceSummary({ label, summary, unknownLabel, footer, causes, allOnline }) {
+function TvDeviceSummary({ label, summary, unknownLabel, footer, causes, allOnline, mergeOffline, offlineLabel }) {
   let offset = 0;
   // A group with nothing to report should read as one plain statement rather
   // than a legend of zeroes. Empty groups are not "all online".
@@ -1673,9 +1673,18 @@ function TvDeviceSummary({ label, summary, unknownLabel, footer, causes, allOnli
       else resolvedCauses.push({ key: "unknown", label: "Chưa rõ", count: remainder });
     }
   }
+  // Current-state summaries (AIBOX) collapse every not-online device into one
+  // "current" slice. Cause verdicts are only meaningful for historic data, so
+  // splitting a live ring three ways labelled machines "Chưa rõ" that were
+  // simply offline. History keeps its causes on the chart instead.
   const ring = resolvedCauses
     ? [{ status: "online", count: summary.online }, ...resolvedCauses.map((cause) => ({ status: cause.key, count: cause.count }))]
-    : (unknownLabel ? ["online", "offline", "unknown"] : ["online", "offline"]).map((status) => ({ status, count: summary[status] }));
+    : mergeOffline
+      ? [
+          { status: "online", count: summary.online },
+          { status: "current", count: summary.total - summary.online },
+        ]
+      : (unknownLabel ? ["online", "offline", "unknown"] : ["online", "offline"]).map((status) => ({ status, count: summary[status] }));
   const segments = ring.filter((segment) => segment.count > 0).map((segment) => {
     const length = summary.total ? segment.count / summary.total * 100 : 0;
     const item = { status: segment.status, count: segment.count, length, offset };
@@ -1684,7 +1693,7 @@ function TvDeviceSummary({ label, summary, unknownLabel, footer, causes, allOnli
   });
   return (
     <div className="tvDeviceSummary">
-      <svg className="tvDonut" viewBox="0 0 80 80" role="img" aria-label={`${label}: tổng ${summary.total}, ${summary.online} kết nối, ${summary.offline} mất kết nối${unknownLabel ? `, ${summary.unknown} ${unknownLabel.replace("Mất", "mất")}` : ""}`}>
+      <svg className="tvDonut" viewBox="0 0 80 80" role="img" aria-label={mergeOffline ? `${label}: tổng ${summary.total}, ${summary.online} kết nối, ${summary.total - summary.online} ${(offlineLabel || "Offline").toLowerCase()}` : `${label}: tổng ${summary.total}, ${summary.online} kết nối, ${summary.offline} mất kết nối${unknownLabel ? `, ${summary.unknown} ${unknownLabel.replace("Mất", "mất")}` : ""}`}>
         <circle className="tvDonutTrack" cx="40" cy="40" r="33" fill="none" strokeWidth="8" />
         {segments.filter((segment) => segment.length > 0).map((segment) => <circle key={segment.status} className={`tvDonutSegment ${segment.status}`} cx="40" cy="40" r="33" fill="none" strokeWidth="8" pathLength="100" strokeDasharray={`${segment.length} ${100 - segment.length}`} strokeDashoffset={-segment.offset} transform="rotate(-90 40 40)" />)}
         <text className="tvDonutTotal" x="40" y="38" textAnchor="middle">{summary.total}</text>
@@ -1693,6 +1702,11 @@ function TvDeviceSummary({ label, summary, unknownLabel, footer, causes, allOnli
       <div className="tvDonutInfo">
         {healthy ? (
           <p className="tvAllOnline">ALL ONLINE</p>
+        ) : mergeOffline ? (
+          <dl className="tvDonutLegend">
+            <div><dt><i aria-hidden="true" className="current" />{offlineLabel || "Offline"}</dt><dd>{summary.total - summary.online}</dd></div>
+            <div><dt><i aria-hidden="true" className="online" />{statusLabel("online")}</dt><dd>{summary.online}</dd></div>
+          </dl>
         ) : resolvedCauses ? (
           <dl className="tvCauseLegend">
             {/* Only causes that actually occurred; a zero is noise beside the ring. */}
@@ -1977,7 +1991,6 @@ function TvDashboard({ data, loadError, isUpdating, onRefresh, notes, noteLookup
   // AIBOX causes come from boot evidence: a box that rebooted while it was
   // unreachable lost power; one that kept the same boot session only lost its
   // link. Boxes still down have no evidence yet and stay "unknown".
-  const aiboxCauseCounts = useMemo(() => buildAiboxOfflineReasons(data), [data]);
   const offlineNetworks = useMemo(() => buildTvOfflineNetworks(data), [data.networks]);
   const totals = siteGroups.reduce((sum, group) => ({
     aiboxOnline: sum.aiboxOnline + group.machines.online, aiboxOffline: sum.aiboxOffline + group.machines.offline,
@@ -2034,18 +2047,13 @@ function TvDashboard({ data, loadError, isUpdating, onRefresh, notes, noteLookup
           return (
             <article aria-labelledby={`tv-site-${group.id}`} className={`tvPanel tvSiteRow${group.id === "other" ? " tvSiteRow--other" : ""}${CAUSE_SITE_IDS.has(group.id) ? " tvSiteRow--causes" : ""}`} key={group.id}>
               <div className="tvSiteName"><h2 id={`tv-site-${group.id}`}>{group.label}</h2></div>
-              {CAUSE_SITE_IDS.has(group.id) ? (
-                <TvDeviceSummary
-                  causes={[
-                    { key: "power", label: "Mất nguồn", count: aiboxCauseCounts.get(group.label)?.power || 0 },
-                    { key: "network", label: "Mất mạng", count: aiboxCauseCounts.get(group.label)?.network || 0 },
-                    { key: "unknown", label: "Chưa rõ", count: aiboxCauseCounts.get(group.label)?.unknown || 0 },
-                  ]}
-                  allOnline
-                  label="AIBOX"
-                  summary={group.machines}
-                />
-              ) : <TvDeviceSummary label="AIBOX" summary={group.machines} />}
+              <TvDeviceSummary
+                allOnline
+                label="AIBOX"
+                mergeOffline
+                offlineLabel="Offline"
+                summary={group.machines}
+              />
               {CAUSE_SITE_IDS.has(group.id) ? (
                 <TvDeviceSummary
                   causes={[
