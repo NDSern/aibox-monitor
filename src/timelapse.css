@@ -781,3 +781,31 @@
 @media (prefers-reduced-motion: reduce) {
   .tlView * { transition: none !important; }
 }
+
+.tlOrder {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.tlOrderButton {
+  align-items: center;
+  background: var(--tl-panel);
+  border: 1px solid var(--tl-border);
+  border-radius: var(--tl-radius-control);
+  color: var(--tl-ink);
+  cursor: pointer;
+  display: inline-flex;
+  height: 2rem;
+  justify-content: center;
+  padding: 0;
+  width: 2rem;
+}
+
+.tlOrderButton:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.tlOrderButton:not(:disabled):hover {
+  background: var(--tl-raised);
+}

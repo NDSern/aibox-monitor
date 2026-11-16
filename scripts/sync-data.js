@@ -11,6 +11,8 @@ const historyPath = path.join(dataDir, "status-history.json");
 const notifyStatePath = path.join(dataDir, "aibox-notify-state.json");
 const availabilityPath = path.join(dataDir, "availability-history.json");
 const bootHistoryPath = path.join(dataDir, "aibox-boot-history.json");
+const shellfleetStatePath = process.env.AIBOX_SHELLFLEET_STATE
+  || path.join(process.env.HOME, ".local", "state", "aibox-shellfleet", "availability.json");
 const publicPath = path.join(__dirname, "..", "public", "aibox-data.json");
 const distPath = path.join(__dirname, "..", "dist", "aibox-data.json");
 const tailBytes = 1024 * 1024 * 2;
@@ -177,7 +179,7 @@ function pruneAvailabilityEvents(events, nowMs) {
 
 function normalizeAvailabilityEvents(events) {
   const sorted = (events || [])
-    .filter((event) => event && (event.status === "online" || event.status === "offline") && isValidTime(event.at))
+    .filter((event) => event && (event.status === "online" || event.status === "offline" || event.status === "unknown") && isValidTime(event.at))
     .sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
   const normalized = [];
   let lastKey = "";
@@ -194,7 +196,12 @@ function normalizeAvailabilityEvents(events) {
 }
 
 function updateAvailabilityEntry(entry, status, statusSince, generatedAt, nowMs) {
-  if (status !== "online" && status !== "offline") return entry || { events: [] };
+  // Unknown is a real observation: Shell Fleet can be connected while the hub
+  // inventory is stale. Recording it stops a gap from silently extending the
+  // previous online/offline run.
+  if (status !== "online" && status !== "offline" && status !== "unknown") {
+    return entry || { events: [] };
+  }
   const next = entry || { events: [] };
   next.events = pruneAvailabilityEvents(next.events, nowMs);
   const eventAt = parseExternalTime(statusSince) || generatedAt;
@@ -231,17 +238,24 @@ function calculateAvailability(entry, nowMs) {
     if (events[index]) index += 1;
   }
   let onlineMs = 0;
-  const observedStart = cursor;
+  let offlineMs = 0;
+  const accumulate = (from, to, state) => {
+    if (to <= from) return;
+    if (state === "online") onlineMs += to - from;
+    else if (state === "offline") offlineMs += to - from;
+  };
   for (; index < events.length; index += 1) {
     const at = Math.min(nowMs, new Date(events[index].at).getTime());
-    if (at > cursor && status === "online") onlineMs += at - cursor;
+    accumulate(cursor, at, status);
     status = events[index].status;
     cursor = at;
   }
-  if (nowMs > cursor && status === "online") onlineMs += nowMs - cursor;
-  const totalMs = nowMs - observedStart;
-  if (totalMs <= 0) return null;
-  return { percent: Math.max(0, Math.min(100, (onlineMs / totalMs) * 100)), observedMs: totalMs };
+  accumulate(cursor, nowMs, status);
+  // Unobserved (unknown) time is neither online nor offline, so it is excluded
+  // from the denominator instead of being credited to whichever state ran last.
+  const observedMs = onlineMs + offlineMs;
+  if (observedMs <= 0) return null;
+  return { percent: Math.max(0, Math.min(100, (onlineMs / observedMs) * 100)), observedMs };
 }
 
 function applyAvailability(payload, generatedAt) {
@@ -565,6 +579,41 @@ function loadTailscaleStatuses() {
   }
 }
 
+// Shell Fleet is the primary availability source for migrated devices. Only
+// entries the adapter marked authoritative (present in its rollout allowlist)
+// override the monitor-log view; everything else stays on the legacy path until
+// it is explicitly migrated.
+function loadShellfleetStatuses() {
+  try {
+    const data = JSON.parse(fs.readFileSync(shellfleetStatePath, "utf8"));
+    const devices = data.devices || {};
+    const statuses = {};
+    for (const ip of Object.keys(devices)) {
+      const entry = devices[ip] || {};
+      if (!entry.authoritative || !entry.status) continue;
+      statuses[ip] = {
+        status: entry.status,
+        statusSince: Number.isFinite(entry.statusSince)
+          ? new Date(entry.statusSince * 1000).toISOString()
+          : null,
+        source: "shellfleet",
+        reason: entry.reason || null,
+        observedAt: entry.observedAtIso || null,
+      };
+    }
+    return statuses;
+  } catch (error) {
+    console.warn(`Shell Fleet availability unavailable: ${error.message}`);
+    return {};
+  }
+}
+
+function mergeShellfleetStatuses(statuses, shellfleetStatuses) {
+  const merged = { ...statuses };
+  for (const ip of Object.keys(shellfleetStatuses)) merged[ip] = shellfleetStatuses[ip];
+  return merged;
+}
+
 function mergeTailscaleDurations(statuses, tailscaleStatuses) {
   const merged = { ...statuses };
   for (const ip of Object.keys(tailscaleStatuses)) {
@@ -658,7 +707,7 @@ function buildTvEventData(store, payload, config, nowMs, bootOutages = {}) {
     timelines.push({ kind: "aibox", ip, events: normalized });
     normalized.forEach((event, index) => {
       if (new Date(event.at).getTime() > nowMs) return;
-      events.push({ at: event.at, kind: "aibox", change: event.status === "offline" ? "offline" : "online",
+      events.push({ at: event.at, kind: "aibox", change: event.status,
         name: aiboxNames.get(ip) || ip, ip, deviceKey: ip, transition: index > 0 });
     });
   }
@@ -707,8 +756,12 @@ function buildTvEventData(store, payload, config, nowMs, bootOutages = {}) {
           status = event.status;
         }
         if (!status) continue;
-        point[`${timeline.kind}${status === "online" ? "Online" : "Offline"}`] += 1;
-        if (timeline.kind === "aibox" && status !== "online") {
+        // An unobserved bucket is not evidence of an outage, so it is not drawn
+        // as online or offline and carries no cause line.
+        const bucketState = status === "online" ? "Online" : status === "offline" ? "Offline" : null;
+        if (!bucketState) continue;
+        point[`${timeline.kind}${bucketState}`] += 1;
+        if (timeline.kind === "aibox" && status === "offline") {
           const cause = aiboxCauseAt(bootOutages[timeline.ip], endMs);
           point[cause === "power" ? "aiboxPower" : cause === "network" ? "aiboxNetwork" : "aiboxUnknown"] += 1;
         }
@@ -808,7 +861,12 @@ function normalize(config) {
   const history = buildStatusHistory(config);
   const targetStatuses = history.targets;
   const scopeStatuses = history.scopes;
-  const statuses = mergeTailscaleDurations(history.aiboxes, loadTailscaleStatuses());
+  const tailscaleStatuses = loadTailscaleStatuses();
+  const shellfleetStatuses = loadShellfleetStatuses();
+  const statuses = mergeShellfleetStatuses(
+    mergeTailscaleDurations(history.aiboxes, tailscaleStatuses),
+    shellfleetStatuses,
+  );
   writeJsonAtomic(historyPath, { updatedAt: new Date().toISOString(), fullScanCompleted: true, aiboxes: statuses, targets: targetStatuses, scopes: scopeStatuses });
   const generatedAt = new Date().toISOString();
   const sourceUpdatedAt = fs.existsSync(logPath) ? fs.statSync(logPath).mtime.toISOString() : null;
@@ -830,7 +888,22 @@ function normalize(config) {
         monitors: groups[group] || [],
         status: statuses[box.ip] ? statuses[box.ip].status : "unknown",
         statusSince: statuses[box.ip] ? statuses[box.ip].statusSince : null,
+        statusSource: statuses[box.ip] ? statuses[box.ip].source || "monitor" : "monitor",
         ...(bootHistory[box.ip] ? { boot: bootHistory[box.ip] } : {}),
+        // Tailscale is diagnostic only for migrated devices: the overview shows
+        // it beside the primary Shell Fleet state, nothing else consumes it.
+        ...(tailscaleStatuses[box.ip]
+          ? { tailscale: { status: tailscaleStatuses[box.ip].status } }
+          : {}),
+        ...(shellfleetStatuses[box.ip]
+          ? {
+              shellfleet: {
+                status: shellfleetStatuses[box.ip].status,
+                reason: shellfleetStatuses[box.ip].reason,
+                observedAt: shellfleetStatuses[box.ip].observedAt,
+              },
+            }
+          : {}),
       };
     }),
     networks: (config.target_scopes || []).filter((scope) => enabledNetworkIds.has(scope.id)).map((scope) => {

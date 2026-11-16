@@ -308,6 +308,40 @@ function sendJson(res, status, data) {
   res.end(`${JSON.stringify(data)}\n`);
 }
 
+function latestAsset(ext) {
+  try {
+    const dir = path.join(distDir, "assets");
+    let best = null;
+    for (const name of fs.readdirSync(dir)) {
+      if (!name.startsWith("index.") || !name.endsWith(ext)) continue;
+      const file = path.join(dir, name);
+      const stat = fs.statSync(file);
+      if (!stat.isFile()) continue;
+      if (!best || stat.mtimeMs > best.mtimeMs) best = { file, mtimeMs: stat.mtimeMs };
+    }
+    return best ? best.file : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function sendLatestAsset(res, ext) {
+  // A stale document (loaded before a deploy) can reference a hashed bundle the
+  // newer build no longer ships. Serving the current bundle under that name lets
+  // the tab mount the current app instead of showing a blank page.
+  const file = latestAsset(ext);
+  if (!file) {
+    sendError(res, 404, "Asset not found");
+    return;
+  }
+  res.writeHead(200, {
+    ...securityHeaders,
+    "Cache-Control": "no-store, max-age=0",
+    "Content-Type": ext === ".js" ? "text/javascript; charset=utf-8" : "text/css; charset=utf-8",
+  });
+  fs.createReadStream(file).pipe(res);
+}
+
 function serveFile(req, res, pathname) {
   let safePath;
   try {
@@ -319,9 +353,22 @@ function serveFile(req, res, pathname) {
   const requested = path.resolve(distDir, safePath || "index.html");
   const relativePath = path.relative(distDir, requested);
   const contained = relativePath && !relativePath.startsWith("..") && !path.isAbsolute(relativePath);
-  const filePath = contained && fs.existsSync(requested) && fs.statSync(requested).isFile()
-    ? requested
-    : path.join(distDir, "index.html");
+  const found = contained && fs.existsSync(requested) && fs.statSync(requested).isFile();
+  // Only route paths may fall back to index.html. A missing asset must fail
+  // loudly: answering 200 with HTML makes a stale tab execute markup as a
+  // module, leaving a blank page with no diagnosable error.
+  const assetLike = Boolean(path.extname(requested)) || /^assets[/\\]/.test(safePath);
+  if (!found && assetLike) {
+    const ext = path.extname(requested).toLowerCase();
+    const fromAssets = /^assets[/\\]/.test(safePath);
+    if (fromAssets && (ext === ".js" || ext === ".css")) {
+      sendLatestAsset(res, ext);
+      return;
+    }
+    sendError(res, 404, "Asset not found");
+    return;
+  }
+  const filePath = found ? requested : path.join(distDir, "index.html");
   if (!fs.existsSync(filePath)) {
     sendError(res, 503, "Web application is not built");
     return;
@@ -609,10 +656,14 @@ function handleConnectivityFleet(res) {
     let waitingMachines = [];
     try {
       const waiting = JSON.parse(fs.readFileSync(connectivityWaitingPath, "utf8"));
+      // A machine that already reports live data is no longer waiting, even if
+      // a stale waiting entry survived a hostname rename.
+      const liveKeys = new Set((machines || []).map((machine) => machine.machine).filter(Boolean));
+      const liveIps = new Set((machines || []).map((machine) => machine.ip).filter(Boolean));
       waitingMachines = Object.keys(waiting).map((machine) => {
         const entry = connectivityMachineIds[machine] || {};
         return { machine, id: entry.id || "", ip: entry.ip || waiting[machine].ip || "", label: entry.label || waiting[machine].label || "" };
-      }).filter((machine) => machine.ip);
+      }).filter((machine) => machine.ip && !liveKeys.has(machine.machine) && !liveIps.has(machine.ip));
     } catch (_) {}
     sendJson(res, 200, { available: true, fetchedAt: Date.now() / 1000, machines, waitingMachines });
   });
@@ -858,6 +909,14 @@ function handleRequest(req, res) {
       console.error(`Note delete failed: ${writeError.message}`);
       sendError(res, 500, "Unable to delete note");
     }
+    return;
+  }
+
+  if (req.method === "GET" && parsed.pathname === "/api/build") {
+    // Lets an already-open screen notice that a newer bundle was deployed and
+    // reload itself instead of running stale code indefinitely.
+    const bundle = latestAsset(".js");
+    sendJson(res, 200, { asset: bundle ? path.basename(bundle) : "" });
     return;
   }
 

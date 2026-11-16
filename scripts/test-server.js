@@ -49,7 +49,7 @@ fs.mkdirSync(monitorDir, { recursive: true });
 fs.writeFileSync(path.join(distDir, "index.html"), "<!doctype html><title>Test dashboard</title>");
 fs.writeFileSync(path.join(distDir, "assets", "test.css"), "body{}\n");
 fs.writeFileSync(path.join(dataDir, "connectivity-waiting.json"), JSON.stringify({
-  aibox7: { id: "td07", ip: "100.64.0.6", label: "Tàu TD-07", reason: "Awaiting SSH" },
+  "aibox-td07": { id: "td07", ip: "100.64.0.6", label: "Tàu TD-07", reason: "Awaiting SSH" },
 }));
 
 const server = childProcess.spawn(process.execPath, [path.join(rootDir, "scripts", "server.js")], {
@@ -242,7 +242,7 @@ async function run() {
   simState = "offline";
   assert.strictEqual(connectivityFleet.machines.find((machine) => machine.machine === "unknown-box").enrolled, false);
   assert.deepStrictEqual(connectivityFleet.waitingMachines, [
-    { machine: "aibox7", id: "td07", ip: "100.64.0.6", label: "Tàu TD-07" },
+    { machine: "aibox-td07", id: "td07", ip: "100.64.0.6", label: "Tàu TD-07" },
   ]);
 
   response = await request("GET", "/api/connectivity/history?machine=td08&limit=999999&minimum_severity=9");

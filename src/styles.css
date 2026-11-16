@@ -438,6 +438,7 @@ button, input, select, textarea { font: inherit; }
 
 .matrixTile.offline { background: color-mix(in srgb, #fee2e2 58%, var(--surface-strong)); border-color: #f0a3a3; }
 .matrixTile.online { border-color: color-mix(in srgb, #10b981 40%, #aab4d1); }
+.matrixTile.tailscaleDown { background: color-mix(in srgb, #fef3c7 62%, var(--surface-strong)); border-color: #d9a441; }
 
 .matrixTile strong { color: var(--text); font-size: clamp(0.52rem, 0.66vw, 0.64rem); line-height: 1.05; min-width: 0; overflow: visible; text-overflow: clip; }
 .matrixTile strong { display: block; overflow-wrap: anywhere; text-align: left; white-space: normal; }
@@ -520,6 +521,7 @@ button, input, select, textarea { font: inherit; }
 .dark .networkCameraTile.online { background: rgba(20, 83, 45, 0.38); border-color: rgba(52, 211, 153, 0.78); }
 .dark .matrixTile.offline,
 .dark .networkCameraTile.offline { background: rgba(127, 29, 29, 0.42); border-color: rgba(251, 113, 133, 0.82); }
+.dark .matrixTile.tailscaleDown { background: rgba(120, 83, 12, 0.4); border-color: rgba(251, 191, 36, 0.8); }
 .dark .good { color: #34d399; }
 .dark .bad { color: #fb7185; }
 .dark .muted { color: #cbd5e1; }
@@ -1914,6 +1916,11 @@ h3 { font-size: clamp(1.2rem, 2vw, 1.55rem); font-weight: 780; margin: 0 0 0.25r
   border-color: #eccaca;
 }
 
+.dashboardOnlyShell .matrixTile.tailscaleDown {
+  background: #fffbea;
+  border-color: #e3c473;
+}
+
 .dashboardOnlyShell .networkCameraTile.unknown {
   background: #fffbef;
   border-color: #ead8a5;
@@ -1984,6 +1991,7 @@ h3 { font-size: clamp(1.2rem, 2vw, 1.55rem); font-weight: 780; margin: 0 0 0.25r
 .dark.dashboardOnlyShell .networkCameraTile.online { background: #112f2b; border-color: #34775e; }
 .dark.dashboardOnlyShell .matrixTile.offline,
 .dark.dashboardOnlyShell .networkCameraTile.offline { background: #321e29; border-color: #70404b; }
+.dark.dashboardOnlyShell .matrixTile.tailscaleDown { background: #332c15; border-color: #8a7333; }
 .dark.dashboardOnlyShell .networkCameraTile.unknown { background: #2d281b; border-color: #695c34; }
 .dark.dashboardOnlyShell .networkCameraTile.unknown strong { color: #e5ecf5; }
 .dark.dashboardOnlyShell .networkCameraTile.unknown .tileAvailability { color: #d9bd68 !important; }
@@ -5977,3 +5985,313 @@ h3 { font-size: clamp(1.2rem, 2vw, 1.55rem); font-weight: 780; margin: 0 0 0.25r
 @media (prefers-reduced-motion: reduce) {
   .cameraHoverPreview { box-shadow: 0 0 0 1px var(--preview-border); }
 }
+
+/* --- AIBOX SIM dialog ----------------------------------------------------
+   Opened from the "Đáng chú ý" AIBOX rows. The TV canvas is theme-independent
+   (its own tokens live on .page.tvShell), so one block covers light and dark. */
+
+.tvEventDeviceButton {
+  align-items: baseline;
+  background: transparent;
+  border: 0;
+  border-radius: 0.3rem;
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  gap: 0.1rem 0.3rem;
+  margin: -0.2rem -0.35rem;
+  padding: 0.2rem 0.35rem;
+  text-align: left;
+  width: calc(100% + 0.7rem);
+}
+
+.tvEventDeviceButton:hover { background: var(--tv-control); }
+.tvEventDeviceButton:focus-visible { outline: 2px solid var(--tv-cause-unknown); outline-offset: 1px; }
+
+.tvSimDialogWrap {
+  align-items: center;
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: clamp(1rem, 4vw, 3rem);
+  position: fixed;
+  z-index: 80;
+}
+
+.tvSimDialogBackdrop {
+  background: rgba(0, 6, 16, 0.62);
+  border: 0;
+  cursor: default;
+  inset: 0;
+  position: absolute;
+  width: 100%;
+}
+
+.tvSimDialog {
+  background: var(--tv-surface);
+  border: 1px solid var(--tv-rule);
+  border-radius: 0.9rem;
+  box-shadow: 0 1.5rem 5rem rgba(0, 5, 18, 0.48);
+  max-width: 38rem;
+  padding: clamp(1.1rem, 2vw, 1.6rem);
+  position: relative;
+  width: 100%;
+}
+
+.tvSimDialogHead {
+  align-items: flex-start;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  margin-bottom: 1.1rem;
+}
+
+.tvSimDialogHead h2 {
+  font-size: clamp(1.05rem, 1.3vw, 1.3rem);
+  font-weight: 600;
+  margin: 0.15rem 0 0.2rem;
+  overflow-wrap: anywhere;
+}
+
+.tvSimKicker {
+  color: var(--tv-muted);
+  font-size: 0.78em;
+}
+
+.tvSimHost {
+  color: var(--tv-secondary);
+  font-size: 0.85em;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.tvSimDialogClose {
+  align-items: center;
+  background: var(--tv-control);
+  border: 1px solid transparent;
+  border-radius: 0.4rem;
+  color: var(--tv-text);
+  display: inline-flex;
+  flex: 0 0 auto;
+  justify-content: center;
+  min-height: 2.5rem;
+  min-width: 2.5rem;
+}
+
+.tvSimDialogClose:hover { border-color: var(--tv-secondary); }
+
+.tvSimRows {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+}
+
+.tvSimRowCard {
+  background: var(--tv-control);
+  border-radius: 0.55rem;
+  padding: 0.85rem 0.95rem;
+}
+
+.tvSimRowHead { margin-bottom: 0.55rem; }
+
+.tvSimKind {
+  border-radius: 0.3rem;
+  display: inline-block;
+  font-size: 0.78em;
+  font-weight: 600;
+  padding: 0.15rem 0.5rem;
+}
+
+.tvSimKind.aibox { background: rgba(112, 213, 163, 0.16); color: var(--tv-cause-aibox, var(--tv-good)); }
+.tvSimKind.router { background: rgba(255, 171, 0, 0.16); color: var(--tv-cause-network); }
+
+.tvSimFields { margin: 0; }
+
+.tvSimFields > div {
+  border-top: 1px solid var(--tv-rule);
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.45rem 0;
+}
+
+.tvSimFields > div:first-child { border-top: 0; }
+
+.tvSimFields dt {
+  color: var(--tv-muted);
+  font-size: 0.8em;
+  font-weight: 400;
+  margin: 0;
+}
+
+.tvSimFields dd {
+  font-size: clamp(0.86rem, 0.8rem + 0.25vw, 0.98rem);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  margin: 0;
+  overflow-wrap: normal;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.tvSimMissing { color: var(--tv-muted); font-style: italic; }
+
+.tvSimEmpty {
+  color: var(--tv-muted);
+  margin: 0;
+  padding: 0.5rem 0;
+}
+
+@media (max-width: 760px) {
+  .tvSimDialogWrap { padding: 0.75rem; }
+  .tvSimRows { grid-template-columns: 1fr; }
+  .tvSimDialogClose { min-height: 2.75rem; min-width: 2.75rem; }
+  .tvEventDeviceButton { min-height: 2.75rem; }
+}
+
+.tvSimListDialog {
+  max-height: min(80vh, 44rem);
+  width: min(54rem, 94vw);
+}
+
+.tvSimListScroll {
+  overflow: auto;
+}
+
+.tvSimTable {
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  width: 100%;
+}
+
+.tvSimTable th,
+.tvSimTable td {
+  padding: 0.4rem 0.6rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.tvSimTable thead th {
+  border-bottom: 1px solid rgba(128, 128, 128, 0.45);
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+}
+
+.tvSimTable tbody tr {
+  border-bottom: 1px solid rgba(128, 128, 128, 0.25);
+}
+
+.tvSimSite {
+  font-weight: 600;
+  vertical-align: top;
+}
+
+.tvSimHostCell {
+  opacity: 0.85;
+}
+
+/* SIM list dialog: wider than the per-unit dialog and scrollable. */
+.tvSimListDialog {
+  display: flex;
+  flex-direction: column;
+  max-height: min(88vh, 50rem);
+  max-width: min(76rem, 96vw);
+  width: min(76rem, 96vw);
+}
+.tvSimListScroll {
+  flex: 1 1 auto;
+  margin-top: 0.75rem;
+  min-height: 0;
+  overflow: auto;
+}
+.tvSimTable {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.85rem;
+  min-width: 62rem;
+  width: 100%;
+}
+.tvSimTable th,
+.tvSimTable td {
+  border-bottom: 1px solid rgba(128, 128, 128, 0.38);
+  border-right: 1px solid rgba(128, 128, 128, 0.28);
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  vertical-align: top;
+}
+.tvSimTable th:last-child,
+.tvSimTable td:last-child {
+  border-right: 0;
+}
+.tvSimTable thead th {
+  background: var(--tv-surface);
+  border-bottom: 2px solid var(--tv-rule);
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.tvSimTable tbody tr:nth-child(2n) td {
+  border-bottom: 2px solid rgba(128, 128, 128, 0.55);
+}
+.tvSimTable tbody tr:hover td {
+  background: var(--tv-ground);
+}
+.tvSimTable .tvSimSite {
+  font-weight: 600;
+  vertical-align: middle;
+}
+.tvSimTable .tvSimHostCell {
+  color: var(--tv-muted);
+}
+
+/* Offline SIM rows are buttons that open the per-unit SIM dialog. */
+.tvSimItem {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  display: block;
+  font: inherit;
+  padding: 0.15rem 0.25rem;
+  text-align: left;
+  width: 100%;
+  border-radius: 0.35rem;
+}
+.tvSimItem:hover { background: var(--tv-ground); }
+.tvSimItem:focus-visible { outline: 2px solid var(--tv-warn); outline-offset: 1px; }
+
+/* Tailscale diagnostic note on the overview AIBOX tiles. Shell Fleet stays the
+   primary state; this line only appears when the two signals disagree. */
+.tileTailscaleNote {
+  color: #8a5a00;
+  font-size: clamp(0.5rem, 0.62vw, 0.6rem);
+  line-height: 1.1;
+}
+
+.dark .tileTailscaleNote,
+.dark.dashboardOnlyShell .tileTailscaleNote { color: #f3cf6a; }
+
+/* The shell scopes the tile's small text colour, so match that specificity. */
+.dashboardOnlyShell .matrixTile .tileTailscaleNote { color: #8a5a00; }
+.dark.dashboardOnlyShell .matrixTile .tileTailscaleNote { color: #f3cf6a; }
+
+/* Dual-transport marker: the device is enrolled in both Shell Fleet and
+   Tailscale, with Shell Fleet as the primary monitoring path and Tailscale kept
+   as the fallback. A small inline glyph beside the status icon; the filled node
+   is the primary link, the open node the standby. */
+.tileTransportBadge {
+  align-items: center;
+  color: #1d4ed8;
+  display: inline-flex;
+  flex: 0 0 auto;
+  line-height: 0;
+}
+
+.tileTransportBadge svg { display: block; height: 0.9em; width: 0.9em; }
+
+.dark .tileTransportBadge,
+.dark.dashboardOnlyShell .tileTransportBadge { color: #7fb2ff; }
+
+.dashboardOnlyShell .matrixTile .tileTransportBadge { color: #1d4ed8; }
+.dark.dashboardOnlyShell .matrixTile .tileTransportBadge { color: #7fb2ff; }

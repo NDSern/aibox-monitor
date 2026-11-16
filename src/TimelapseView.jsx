@@ -2,8 +2,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   ArrowsIn,
   ArrowsOut,
+  CaretDown,
   CaretLeft,
   CaretRight,
+  CaretUp,
   MagnifyingGlass,
   Pause,
   Play,
@@ -109,7 +111,7 @@ function dayIndexOf(timeline, time) {
   return index === -1 ? timeline.days.length - 1 : index;
 }
 
-export default function TimelapseView({ networks = [], now }) {
+export default function TimelapseView({ networks = [], now, onMoveNetwork }) {
   const [referenceNow] = useState(() => now || Date.now());
   const cameraIndex = useMemo(() => {
     const list = [];
@@ -444,6 +446,10 @@ export default function TimelapseView({ networks = [], now }) {
             {networks.map((network) => <option key={network.id} value={network.id}>{network.name}</option>)}
           </select>
         </label>
+        <div className="tlOrder" role="group" aria-label="Sắp xếp mạng">
+          <button aria-label="Đưa mạng lên" className="tlOrderButton" disabled={!networkId || !onMoveNetwork || networks.findIndex((network) => network.id === networkId) <= 0} onClick={() => onMoveNetwork(networkId, -1)} title="Đưa mạng lên" type="button"><CaretUp aria-hidden="true" size={14} weight="bold" /></button>
+          <button aria-label="Đưa mạng xuống" className="tlOrderButton" disabled={!networkId || !onMoveNetwork || (() => { const index = networks.findIndex((network) => network.id === networkId); return index < 0 || index === networks.length - 1; })()} onClick={() => onMoveNetwork(networkId, 1)} title="Đưa mạng xuống" type="button"><CaretDown aria-hidden="true" size={14} weight="bold" /></button>
+        </div>
         <label className="tlSearch">
           <span className="visually-hidden">Tìm camera</span>
           <MagnifyingGlass aria-hidden="true" size={15} />

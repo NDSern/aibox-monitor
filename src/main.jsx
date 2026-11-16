@@ -19,6 +19,7 @@ import {
   MagnifyingGlass,
   Moon,
   NotePencil,
+  SimCard,
   Pause,
   Play,
   QuestionMark,
@@ -36,6 +37,9 @@ import "bootstrap/dist/css/bootstrap.min.css";
 import "./styles.css";
 import { loadDeviceOrder, moveDevice, orderDevices, saveDeviceOrder } from "./device-order.mjs";
 import { buildTvGroups, buildTvOfflineNetworks, buildTvOfflineReasons, buildTvSiteLabels } from "./tv-groups.mjs";
+import { simInfoFor } from "./tv-sim-data.mjs";
+import { TvSimDialog } from "./TvSimDialog.jsx";
+import { TvSimListDialog } from "./TvSimListDialog.jsx";
 import TimelapseView from "./TimelapseView.jsx";
 import { mergeArchiveInventory } from "./timelapse-inventory.js";
 
@@ -1558,7 +1562,7 @@ function ConnectivityView({ aiboxes, now }) {
                         <dl className="linkMetrics">
                           <div><dt>Trạng thái</dt><dd>{statusLabel(sample.state)}</dd></div>
                           <div><dt>RTT</dt><dd>{sample.rtt_ms != null ? `${sample.rtt_ms.toFixed(1)} ms` : "—"}</dd></div>
-                          <div><dt>Mất gói</dt><dd>{sample.loss_percent != null ? `${sample.loss_percent}%` : "—"}</dd></div>
+                          <div><dt>Mất gói</dt><dd>{sample.carrier_down ? "—" : sample.loss_percent != null ? `${sample.loss_percent}%` : "—"}</dd></div>
                           <div><dt>Tín hiệu</dt><dd>{sample.carrier_down ? "Mất" : "Có"}</dd></div>
                           <div><dt>Địa chỉ</dt><dd className="mono">{primaryAddress(sample)}</dd></div>
                           <div><dt>Đích kiểm tra</dt><dd>{targetsSummary(sample)}</dd></div>
@@ -1616,7 +1620,7 @@ function ConnectivityView({ aiboxes, now }) {
                     const severity = sampleSeverityLevel(record);
                     const type = record.kind === "measurement" ? "Phép đo" : record.kind === "incident" ? "Sự cố" : record.kind === "diagnostic" ? "Nhật ký" : "Gián đoạn";
                     let detail = record.kind === "measurement"
-                      ? `${record.interface || "—"} · ${record.state === "offline" ? "mất kết nối · " : ""}RTT ${record.rtt_ms != null ? `${record.rtt_ms.toFixed(1)} ms` : "—"} · mất gói ${record.loss_percent != null ? `${record.loss_percent}%` : "—"} · ${targetsSummary(record)}`
+                      ? `${record.interface || "—"} · ${record.state === "offline" ? "mất kết nối · " : ""}RTT ${record.rtt_ms != null ? `${record.rtt_ms.toFixed(1)} ms` : "—"} · mất gói ${record.carrier_down ? "—" : record.loss_percent != null ? `${record.loss_percent}%` : "—"} · ${targetsSummary(record)}`
                       : record.kind === "incident" ? incidentDetail(record) : record.kind === "diagnostic" ? `${record.source}: ${record.message}`
                         : record.reason === "agent started; prior incident continuity unknown" ? "Bộ theo dõi khởi động; chưa rõ tính liên tục của sự cố trước đó"
                           : record.reason === "clock jump or monitoring gap" ? "Đồng hồ thay đổi hoặc giám sát gián đoạn" : (record.reason || "Giám sát gián đoạn");
@@ -1865,7 +1869,7 @@ function useTvAutoScroll(ref, active) {
   }, [ref, active]);
 }
 
-function TvNotableList({ columnLabel, countLabel, emptyLabel, items, now, title }) {
+function TvNotableList({ columnLabel, countLabel, emptyLabel, items, now, onSelect, selectable, title }) {
   return (
     <div className="tvNotableList">
       <h3>{title} <span className="tvSeriesBad">{items.length}</span></h3>
@@ -1882,7 +1886,15 @@ function TvNotableList({ columnLabel, countLabel, emptyLabel, items, now, title 
                   <tr key={item.key}>
                     <td className="tvEventTime">{since ? <time dateTime={since}>{tvTime(since, { hour: "2-digit", minute: "2-digit", hour12: false })} {new Date(since).toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit" })}</time> : "—"}</td>
                     <td className="tvEventScope">{item.site || "—"}</td>
-                    <td className="tvEventDevice" title={label}><strong>{item.name}</strong>{item.detail ? <span> · {item.detail}</span> : null}</td>
+                    <td className="tvEventDevice" title={label}>
+                      {selectable && onSelect ? (
+                        <button aria-haspopup="dialog" className="tvEventDeviceButton" onClick={() => onSelect(item)} type="button">
+                          <strong>{item.name}</strong>{item.detail ? <span> · {item.detail}</span> : null}
+                        </button>
+                      ) : (
+                        <><strong>{item.name}</strong>{item.detail ? <span> · {item.detail}</span> : null}</>
+                      )}
+                    </td>
                     {countLabel ? <td className="tvEventCount"><span className="tvBad">{item.count}</span>/{item.total}</td> : null}
                     <td className="tvEventStatus"><span className="tvBad"><i aria-hidden="true" />{since ? formatDuration(since, now) : "Chưa rõ"}</span></td>
                   </tr>
@@ -1901,7 +1913,10 @@ function buildTvSimSummary(fleet, aiboxes) {
   const sims = (fleet?.machines || []).flatMap((machine) => {
     const sample = machine.links?.USB?.sample;
     if (!sample) return [];
-    return [{ key: machine.id || machine.ip, name: names.get(machine.ip) || machine.label || machine.machine || machine.ip, online: sample.state === "online", rtt: Number(sample.rtt_ms), loss: Number(sample.loss_percent), since: Number(machine.usbOfflineSince) }];
+    // A carrier-down link never got probed, so its loss figure is a sentinel
+    // and reporting it as measured packet loss would be wrong.
+    const carrierDown = sample.carrier_down === true;
+    return [{ key: machine.id || machine.ip, ip: machine.ip, name: names.get(machine.ip) || machine.label || machine.machine || machine.ip, online: sample.state === "online", carrierDown, rtt: Number(sample.rtt_ms), loss: carrierDown ? null : Number(sample.loss_percent), since: Number(machine.usbOfflineSince) }];
   });
   const online = sims.filter((sim) => sim.online);
   const rtts = online.map((sim) => sim.rtt).filter(Number.isFinite);
@@ -2002,6 +2017,22 @@ function TvDashboard({ data, loadError, isUpdating, onRefresh, notes, noteLookup
   const offlineAiboxes = (Array.isArray(data.aiboxes) ? data.aiboxes : [])
     .filter((box) => box.status === "offline")
     .sort((a, b) => (Date.parse(a.statusSince) || Infinity) - (Date.parse(b.statusSince) || Infinity));
+  // Which AIBOX row has its SIM sheet open, plus the trigger element so focus
+  // can be handed back to the exact row that opened it.
+  const [simDialog, setSimDialog] = useState(null);
+  const simTriggerRef = useRef(null);
+  const openSimDialog = useCallback((item) => {
+    simTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setSimDialog({ ip: item.ip || item.key, name: item.name });
+  }, []);
+  const closeSimDialog = useCallback(() => setSimDialog(null), []);
+  const [simListOpen, setSimListOpen] = useState(false);
+  const simListTriggerRef = useRef(null);
+  const openSimList = useCallback(() => {
+    simListTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setSimListOpen(true);
+  }, []);
+  const closeSimList = useCallback(() => setSimListOpen(false), []);
   const generatedLabel = tvTime(data.generatedAt, { hour: "2-digit", minute: "2-digit", hour12: false });
   const dateLabel = new Date(tvNow).toLocaleDateString("vi-VN", { weekday: "long", day: "2-digit", month: "2-digit", year: "numeric" });
   const clockLabel = tvTime(tvNow, { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
@@ -2090,9 +2121,18 @@ function TvDashboard({ data, loadError, isUpdating, onRefresh, notes, noteLookup
                 <ul aria-label="SIM mất kết nối" className="tvSimList" ref={simScrollRef} tabIndex={0}>
                   {sim.offlineSims.map((item) => (
                     <li key={item.key}>
-                      <strong>{item.name}</strong>
-                      {Number.isFinite(item.loss) ? <span> · mất gói {Math.round(item.loss)}%</span> : null}
-                      <span className="tvBad"> · {Number.isFinite(item.since) && item.since > 0 ? formatDuration(item.since * 1000, tvNow) : "Chưa rõ"}</span>
+                      <button
+                        aria-label={`Thông tin SIM ${item.name}`}
+                        className="tvSimItem"
+                        onClick={() => openSimDialog({ ip: item.ip, name: item.name })}
+                        type="button"
+                      >
+                        <strong>{item.name}</strong>
+                        {item.carrierDown
+                          ? <span className="tvWarn"> · mất tín hiệu</span>
+                          : Number.isFinite(item.loss) ? <span> · mất gói {Math.round(item.loss)}%</span> : null}
+                        <span className="tvBad"> · {Number.isFinite(item.since) && item.since > 0 ? formatDuration(item.since * 1000, tvNow) : "Chưa rõ"}</span>
+                      </button>
                     </li>
                   ))}
                 </ul>
@@ -2105,16 +2145,18 @@ function TvDashboard({ data, loadError, isUpdating, onRefresh, notes, noteLookup
 
       <div className="tvDetailsGrid">
         <section aria-labelledby="tv-events-title" className="tvPanel tvEventsPanel">
-          <header className="tvPanelHeader"><h2 id="tv-events-title">Đáng chú ý</h2><span>Lâu nhất trước</span></header>
+          <header className="tvPanelHeader"><h2 id="tv-events-title">Đáng chú ý</h2><span>Lâu nhất trước</span><button aria-label="Danh sách SIM" className="tvAddNote" onClick={openSimList} title="Danh sách SIM" type="button"><SimCard aria-hidden="true" size={18} /></button></header>
           <div className="tvNotableGrid">
             <TvNotableList
               columnLabel="AIBOX"
               emptyLabel="Không có AIBOX mất kết nối"
               items={offlineAiboxes.map((box) => {
                 const named = box.name && box.name !== box.ip;
-                return { key: box.ip, since: box.statusSince, site: siteLabels.get(box.ip), name: named ? box.name : box.ip, detail: named ? box.ip : "" };
+                return { key: box.ip, since: box.statusSince, site: siteLabels.get(box.ip), name: named ? box.name : box.ip, detail: named ? box.ip : "", ip: box.ip };
               })}
               now={tvNow}
+              onSelect={openSimDialog}
+              selectable
               title="AIBOX mất kết nối"
             />
             <TvNotableList
@@ -2145,6 +2187,18 @@ function TvDashboard({ data, loadError, isUpdating, onRefresh, notes, noteLookup
         </section>
       </div>
 
+      {simDialog ? (
+        <TvSimDialog
+          info={simInfoFor(simDialog.ip)}
+          ip={simDialog.ip}
+          name={simDialog.name}
+          onClose={closeSimDialog}
+          returnFocusRef={simTriggerRef}
+        />
+      ) : null}
+      {simListOpen ? (
+        <TvSimListDialog onClose={closeSimList} returnFocusRef={simListTriggerRef} />
+      ) : null}
     </div>
   );
 }
@@ -2247,8 +2301,8 @@ function App() {
     return () => { stopped = true; };
   }, []);
   const timelapseNetworks = useMemo(
-    () => mergeArchiveInventory(cameraNetworks, archiveInventory),
-    [cameraNetworks, archiveInventory],
+    () => applySavedOrder(mergeArchiveInventory(cameraNetworks, archiveInventory), layout.networkOrder, (network) => network.id),
+    [cameraNetworks, archiveInventory, layout.networkOrder],
   );
   const loaded = isDataLoaded(data);
   const online = aiboxes.filter((box) => box.status === "online").length;
@@ -2584,6 +2638,10 @@ function App() {
   editingRef.current = Boolean(activeNote || activeConfig);
 
   useEffect(() => {
+    // Single deployment watcher. Two overlapping watchers used to race: the
+    // newer one reloaded unconditionally and could discard an unsaved note or
+    // config edit that this guard exists to protect.
+    //
     // Track every hashed asset, not just the script: a release that changes
     // only CSS keeps the same script name, and comparing scripts alone would
     // leave open tabs on the old stylesheet.
@@ -2593,7 +2651,10 @@ function App() {
     };
     if (!current.js) return undefined;
 
+    let stopped = false;
+
     async function checkBuild() {
+      if (stopped) return;
       try {
         const response = await fetch(`/?t=${Date.now()}`, { cache: "no-store" });
         if (!response.ok) return;
@@ -2605,14 +2666,25 @@ function App() {
         const changed =
           (latest.js && latest.js !== current.js) ||
           (latest.css && latest.css !== current.css);
+        // While a dialog is open the user may be mid-edit; wait for the next
+        // interval instead of reloading over their unsaved work.
         if (changed && !editingRef.current) window.location.reload();
       } catch (_) {
         // Server unreachable; try again on the next interval.
       }
     }
 
+    const onVisible = () => {
+      if (document.visibilityState === "visible") checkBuild();
+    };
+
     const timer = setInterval(checkBuild, 60_000);
-    return () => clearInterval(timer);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, []);
 
   useEffect(() => {
@@ -2891,6 +2963,20 @@ function App() {
     const currentOrder = mergedOrder(layout.networkOrder, sourceOrder);
     const nextOrder = moveToPosition(currentOrder, draggedNetworkId, targetId, position);
     if (nextOrder === currentOrder) return;
+    const nextLayout = { ...layout, networkOrder: nextOrder };
+    setLayout(nextLayout);
+    saveLayout(nextLayout);
+  }
+
+  function reorderTimelapseNetwork(networkId, step) {
+    const sourceOrder = timelapseNetworks.map((network) => network.id);
+    const currentOrder = mergedOrder(layout.networkOrder, sourceOrder);
+    const from = currentOrder.indexOf(networkId);
+    const to = from + step;
+    if (from === -1 || to < 0 || to >= currentOrder.length) return;
+    const nextOrder = currentOrder.slice();
+    nextOrder[from] = currentOrder[to];
+    nextOrder[to] = currentOrder[from];
     const nextLayout = { ...layout, networkOrder: nextOrder };
     setLayout(nextLayout);
     saveLayout(nextLayout);
@@ -3469,11 +3555,24 @@ function App() {
                   minRows={1}
                   minWidth={mobileDashboard ? 145 : 168}
                   onPageMeta={updateAiboxPageMeta}
-                  renderItem={(box) => (
-                    <article aria-label={`${box.name}, IP ${box.ip}, ${statusLabel(box.status)}`} className={`matrixTile ${box.status}`} key={box.ip} title={`${box.name} · ${box.ip}`}>
-                        <StatusSymbol status={box.status} /><RollingName name={compactDeviceName(box.name)} /><small className="tileAvailability" title="Tỷ lệ thời gian kết nối">{formatAvailability(box.availability)}</small>
+                  renderItem={(box) => {
+                    // Shell Fleet is primary. Tailscale is a diagnostic here: when
+                    // the device answers on Shell Fleet but not on Tailscale the
+                    // tile turns amber instead of claiming the device is healthy.
+                    const tailscaleDiverged = box.shellfleet?.status === "online" && box.tailscale?.status === "offline";
+                    // Enrolled in both transports, with Shell Fleet as the primary
+                    // monitor and Tailscale kept as the fallback path.
+                    const dualTransport = Boolean(box.shellfleet && box.tailscale);
+                    const dualLabel = "Đã thêm vào cả Shell Fleet và Tailscale · Shell Fleet giám sát chính, Tailscale dự phòng";
+                    return (
+                    <article aria-label={`${box.name}, IP ${box.ip}, ${statusLabel(box.status)}${dualTransport ? ", Shell Fleet chính, Tailscale dự phòng" : ""}${tailscaleDiverged ? ", Tailscale mất kết nối" : ""}`} className={`matrixTile ${box.status}${tailscaleDiverged ? " tailscaleDown" : ""}`} key={box.ip} title={`${box.name} · ${box.ip}${dualTransport ? " · Shell Fleet chính, Tailscale dự phòng" : ""}${tailscaleDiverged ? " · Tailscale mất kết nối" : ""}`}>
+                        <StatusSymbol status={box.status} />{dualTransport ? <span className="tileTransportBadge" aria-hidden="true" title={dualLabel}><svg viewBox="0 0 16 16" width="1em" height="1em" focusable="false"><path d="M5 8h6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" opacity="0.65"/><circle cx="4" cy="8" r="2.6" fill="currentColor"/><circle cx="12" cy="8" r="2.3" fill="none" stroke="currentColor" strokeWidth="1.4"/></svg></span> : null}<RollingName name={compactDeviceName(box.name)} />
+                        {tailscaleDiverged
+                          ? <small className="tileTailscaleNote" title="Shell Fleet kết nối, Tailscale mất kết nối">Tailscale: mất</small>
+                          : <small className="tileAvailability" title="Tỷ lệ thời gian kết nối">{formatAvailability(box.availability)}</small>}
                     </article>
-                  )}
+                    );
+                  }}
                   wrapPages={false}
                 /> : <div className="emptyState compact dashboardEmpty">Không có AIBOX phù hợp bộ lọc.</div>}
             </section> : null}
@@ -3516,7 +3615,7 @@ function App() {
             </div>
           </div>
         ) : activeView === "timelapse" ? (
-          <TimelapseView networks={timelapseNetworks} />
+          <TimelapseView networks={timelapseNetworks} onMoveNetwork={reorderTimelapseNetwork} />
         ) : activeView === "fleet" ? (
           <div className={`container-xxl fleetDetailView ${desktopFleet ? "desktopFleet" : "flowFleet"}`}>
             <section className="hero controlDeck fleetCommandBand">
@@ -3729,4 +3828,34 @@ function Stat({ ariaLabel, label, value, tone = "normal", active = false, onClic
   );
 }
 
-createRoot(document.getElementById("root")).render(<App />);
+class AppErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { failed: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error, info) {
+    console.error("App render failed", error, info);
+  }
+
+  render() {
+    if (!this.state.failed) return this.props.children;
+    return (
+      <div role="alert" style={{ margin: "4rem auto", maxWidth: "34rem", padding: "0 1.5rem", fontFamily: "inherit" }}>
+        <h1 style={{ fontSize: "1.5rem", marginBottom: "0.75rem" }}>Không tải được bảng giám sát</h1>
+        <p style={{ marginBottom: "1.25rem" }}>Giao diện gặp lỗi khi hiển thị. Tải lại trang để thử lại.</p>
+        <button onClick={() => window.location.reload()} style={{ cursor: "pointer", padding: "0.5rem 1rem" }} type="button">Tải lại</button>
+      </div>
+    );
+  }
+}
+
+createRoot(document.getElementById("root")).render(
+  <AppErrorBoundary>
+    <App />
+  </AppErrorBoundary>,
+);
