@@ -34,6 +34,10 @@ DEFAULT_ROLLOUT = "100.64.0.85"
 # connection-collector fire concurrently at each minute boundary. 8 slots made
 # the adapter reject the overlap with TransportError('busy'), failing transfers.
 MAX_CONCURRENT_EXEC = 24
+# A device whose agent repeatedly fails to finish an exec is put on a cooldown.
+# Callers then get an immediate "degraded" error and fall back to SSH instead of
+# paying the full exec timeout on every archive/snapshot pass.
+DEGRADED_SECONDS = 600
 
 
 def load_settings(path=CONFIG_PATH):
@@ -69,6 +73,8 @@ class Adapter:
             inventory_ttl=float(settings.get("SHELLFLEET_INVENTORY_TTL", "60")),
         )
         self._exec_slots = threading.Semaphore(MAX_CONCURRENT_EXEC)
+        self._degraded = {}
+        self._degraded_lock = threading.Lock()
 
     def start(self):
         self.hub.start()
@@ -113,17 +119,38 @@ class Adapter:
         # privileged operations run as root and must not be downgraded to the
         # device user; run_as is ignored in that case.
         user = None if privileged else (run_as or device.get("user") or None)
+        ip = device.get("ip") or str(key)
+        now = time.time()
+        with self._degraded_lock:
+            until = self._degraded.get(ip, 0)
+        if until > now:
+            raise TransportError("degraded", "recent timeouts")
         if not self._exec_slots.acquire(blocking=False):
             raise TransportError("busy", "execution slots exhausted")
         try:
-            return self.hub.execute(
-                agent,
-                script,
-                run_as=user,
-                timeout=timeout,
-                session_timeout=session_timeout,
-                privileged=privileged,
-            )
+            try:
+                result = self.hub.execute(
+                    agent,
+                    script,
+                    run_as=user,
+                    timeout=timeout,
+                    session_timeout=session_timeout,
+                    privileged=privileged,
+                )
+            except TransportError as exc:
+                if exc.reason in ("command-timeout", "agent-unreachable"):
+                    with self._degraded_lock:
+                        self._degraded[ip] = time.time() + DEGRADED_SECONDS
+                    log.warning(
+                        "device %s degraded for %ss after %s",
+                        ip,
+                        DEGRADED_SECONDS,
+                        exc.reason,
+                    )
+                raise
+            with self._degraded_lock:
+                self._degraded.pop(ip, None)
+            return result
         finally:
             self._exec_slots.release()
 
