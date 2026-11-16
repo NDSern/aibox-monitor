@@ -20,10 +20,11 @@ SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
        "-o", "StrictHostKeyChecking=accept-new"]
 
 DEVICES = [
-    ("td07", "aibox-td07", "100.64.0.6"),
     ("th07", "aibox-th07", "100.64.0.104"),
     ("th08", "aibox-th08", "100.64.0.122"),
     ("th09", "aibox-th09", "100.64.0.123"),
+    ("th04", "aibox-th04", "100.64.0.1"),
+    ("th06", "aibox-th06", "100.64.0.82"),
 ]
 
 SCRIPTS = {

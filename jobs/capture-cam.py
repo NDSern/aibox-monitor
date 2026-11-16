@@ -49,6 +49,9 @@ LATEST_KEEP = 2
 # Mainstream stills are evidence, but they must stay under the hub download
 # budget; anything bigger is downscaled on the box before it is stored.
 SNAPSHOT_TARGET_BYTES = 150 * 1024
+# Archive substream frames share the same hub download cap as stills; keep
+# both under it so the Shell Fleet path transfers them in one chunk.
+ARCHIVE_TARGET_BYTES = 150 * 1024
 WIDTH, HEIGHT = 160, 120
 FRAME_BYTES = WIDTH * HEIGHT
 BURST_COUNT = 10
@@ -396,8 +399,9 @@ def capture_camera(camera_ip, entry, cache):
     if sub_uri:
         blob = grab_jpeg(sub_uri)
         if blob is not None:
-            store_jpeg(os.path.join(CAPTURE_ROOT, "archive", camera_ip), "sub.jpg", blob,
-                       valid=jpeg_is_valid(blob))
+            shot = shrink_jpeg(blob, ARCHIVE_TARGET_BYTES)
+            store_jpeg(os.path.join(CAPTURE_ROOT, "archive", camera_ip), "sub.jpg", shot,
+                       valid=jpeg_is_valid(shot))
             prune_dir(os.path.join(CAPTURE_ROOT, "archive", camera_ip), ARCHIVE_KEEP, "sub-")
             wrote = True
     if main_uri:

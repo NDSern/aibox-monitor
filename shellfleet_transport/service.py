@@ -38,8 +38,9 @@ MAX_CONCURRENT_EXEC = 24
 # cooldown. Callers then get an immediate "degraded" error and fall back to SSH
 # instead of paying the full timeout on every archive/snapshot pass. The
 # cooldown is per operation, not per device: a stalled privileged exec must not
-# disable plain exec or downloads for the same box.
-DEGRADED_SECONDS = 600
+# disable plain exec or downloads for the same box. Kept short because each
+# pass has an SSH fallback, so a stale cooldown costs more than one retry.
+DEGRADED_SECONDS = 180
 
 
 def load_settings(path=CONFIG_PATH):
