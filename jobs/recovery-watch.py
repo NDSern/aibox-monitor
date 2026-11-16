@@ -13,7 +13,7 @@ import subprocess
 import sys
 import time
 
-DURATION = 8 * 3600
+DURATION = int(os.environ.get("WATCH_SECONDS", 8 * 3600))
 POLL = 300
 STATE = "/home/boxtest2/.cache/aibox-recovery"
 SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
@@ -112,7 +112,8 @@ def main():
     os.makedirs(STATE, exist_ok=True)
     started = time.time()
     done = {}
-    log({"event": "start", "seconds": DURATION, "devices": [d[0] for d in DEVICES]})
+    log({"event": "start", "seconds": DURATION, "devices": [d[0] for d in DEVICES],
+         "ends": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(started + DURATION))})
 
     while time.time() - started < DURATION:
         for name, user, ip in DEVICES:
