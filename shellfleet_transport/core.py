@@ -75,6 +75,10 @@ class HubConnection:
         # two concurrent callers steal each other's events out of one queue.
         self._channels = {}
         self._channel_lock = threading.Lock()
+        # Serialise session handshakes: the hub can omit `agent_id` on the
+        # acknowledgement, so concurrent callers could otherwise consume each
+        # other's `session-started` event and leak the unused session.
+        self._start_lock = threading.Lock()
         self._stop = threading.Event()
         self._reader = None
         self._lock = threading.RLock()
@@ -414,14 +418,48 @@ class HubConnection:
 
         payload = "\n".join(lines) + "\n"
 
-        self.emit("start-session", {"agent_id": agent_id})
-        # Another caller's acknowledgement must never open this session channel.
-        _, ack = self.wait_event(
-            "session-started",
-            session_timeout,
-            lambda event: isinstance(event, dict)
-            and (event.get("agent_id") in (None, agent_id)),
-        )
+        with self._start_lock:
+            # A start that timed out can leave its acknowledgement in the shared
+            # queue. Close that orphaned session now instead of letting the next
+            # caller run inside it (which also leaks an agent-side PTY).
+            while True:
+                try:
+                    stale_name, stale = self.events.get_nowait()
+                except queue.Empty:
+                    break
+                if (stale_name == "session-started" and isinstance(stale, dict)
+                        and stale.get("session_id")):
+                    try:
+                        self.emit("close-session", {"session_id": stale["session_id"]})
+                    except Exception:
+                        pass
+                else:
+                    self._enqueue(stale_name, stale)
+            self.emit("start-session", {"agent_id": agent_id})
+            # Holding the lock makes the acknowledgement unambiguous even when
+            # the hub reports no agent_id.
+            _, ack = self.wait_event(
+                "session-started",
+                # Cap the handshake wait: the lock is global, so one dead agent
+                # must not stall every other exec for the full session timeout.
+                min(session_timeout, 12.0),
+                lambda event: isinstance(event, dict)
+                and (event.get("agent_id") in (None, agent_id)),
+            )
+            if not ack or not ack.get("session_id"):
+                # A late acknowledgement may still arrive; close it so the
+                # remote session does not outlive this failed call.
+                _, late = self.wait_event(
+                    "session-started",
+                    1.0,
+                    lambda event: isinstance(event, dict)
+                    and (event.get("agent_id") in (None, agent_id)),
+                )
+                if late and late.get("session_id"):
+                    try:
+                        self.emit("close-session", {"session_id": late["session_id"]})
+                    except Exception:
+                        pass
         if not ack or not ack.get("session_id"):
             raise TransportError("agent-unreachable", "no session")
         session_id = ack["session_id"]
