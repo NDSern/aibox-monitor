@@ -67,7 +67,7 @@ CHECKERS = [
     ("th06-lan", "aibox-th06@100.64.0.82"),
     ("th08-lan", "aibox-th08@100.64.0.122"),
     ("poseidon-lan", "vtas-aibox1@100.64.0.45"),
-    ("td07-lan", "aibox-td07@aibox-td07"),
+    ("td07-lan", "aibox-td07@100.64.0.6"),
 ]
 ARCHIVE_REMOTE = "aibox-camera-capture/archive"
 

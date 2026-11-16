@@ -44,6 +44,7 @@ CHECKERS = [
     ("myxuan-lan", "aibox-mxa3@100.64.0.36"),
     ("giaminh-lan", "aibox-hp1@100.64.0.49"),
     ("td08-lan", "aibox-td08@100.64.0.27"),
+    ("td07-lan", "aibox-td07@100.64.0.6"),
     ("td09-lan", "aibox-td09@100.64.0.121"),
     ("th04-lan", "aibox-th04@100.64.0.1"),
     ("th07-lan", "aibox-th07@100.64.0.104"),
