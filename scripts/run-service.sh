@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd /home/boxtest2/aibox-monitor-webapp
+cd /home/boxtest2/aibox-monitor
 
 while true; do
   /usr/bin/flock -w 120 /tmp/aibox-monitor-webapp-sync.lock /usr/bin/node scripts/sync-data.js || true
