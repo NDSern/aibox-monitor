@@ -1,9 +1,11 @@
+# --- python monitor ---
 .env
 .venv
 aiboxes.json
 recipients.json
 __pycache__/
 *.log
+*.log.*
 .gitnexus
 AGENTS.md
 CLAUDE.md
@@ -14,4 +16,11 @@ config-backups/
 config.json.*
 config.candidate-*.json
 *.bak-*
-*.log.*
+
+# --- webapp ---
+node_modules/
+dist/
+data/
+public/aibox-data.json
+src/aibox-data.json
+scripts/*.before-*

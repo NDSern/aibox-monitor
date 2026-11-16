@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Bảng giám sát trạng thái AIBOX và camera" />
+    <title>Giám sát AIBOX</title>
+    <script>
+      // A tab left open across a deploy can still reference a bundle that no
+      // longer exists. Reload once instead of showing a blank page forever.
+      (function () {
+        var KEY = "aibox-boot-reloads";
+        var MAX = 2;
+        function navigateCount() {
+          var fromUrl = Number(new URL(location.href).searchParams.get("_n"));
+          return isFinite(fromUrl) && fromUrl > 0 ? Math.floor(fromUrl) : 0;
+        }
+        function attempts() {
+          // The URL copy keeps the counter honest when storage is blocked:
+          // otherwise every failed read looked like attempt zero and the page
+          // reloaded forever instead of stopping at MAX.
+          var stored = 0;
+          try { stored = Number(sessionStorage.getItem(KEY) || 0) || 0; } catch (error) { stored = 0; }
+          return Math.max(stored, navigateCount());
+        }
+        function store(value) {
+          try { sessionStorage.setItem(KEY, String(value)); } catch (error) { /* private mode */ }
+        }
+        function mounted() {
+          var root = document.getElementById("root");
+          return Boolean(root && root.childElementCount > 0);
+        }
+        function reload() {
+          var tried = attempts();
+          if (tried >= MAX) return false;
+          store(tried + 1);
+          var url = new URL(location.href);
+          url.searchParams.set("_r", String(Date.now()));
+          url.searchParams.set("_n", String(tried + 1));
+          location.replace(url.toString());
+          return true;
+        }
+        function check() {
+          if (mounted()) {
+            store(0);
+            return;
+          }
+          reload();
+        }
+        document.addEventListener("error", function (event) {
+          var target = event.target;
+          if (target && target.tagName === "SCRIPT") setTimeout(check, 0);
+        }, true);
+        window.addEventListener("error", function () { setTimeout(check, 1000); });
+        window.addEventListener("unhandledrejection", function () { setTimeout(check, 1000); });
+        // Keep watching for a while: a mount can still fail after the first
+        // paint if the document raced a deploy.
+        var ticks = 0;
+        var timer = setInterval(function () {
+          ticks += 1;
+          if (mounted()) {
+            store(0);
+            clearInterval(timer);
+            return;
+          }
+          if (ticks >= 20) clearInterval(timer);
+          if (!reload()) clearInterval(timer);
+        }, 5000);
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

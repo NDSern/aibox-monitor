@@ -1,0 +1,17 @@
+[Unit]
+Description=AIBOX Monitor Webapp
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/boxtest2/aibox-monitor-webapp
+Environment=HOME=/home/boxtest2
+Environment=NODE_ENV=production
+Environment=AIBOX_WEBAPP_REFRESH_SECONDS=10
+ExecStartPre=/usr/bin/npm run sync:data
+ExecStart=/home/boxtest2/aibox-monitor-webapp/scripts/run-service.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
