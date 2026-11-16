@@ -1,0 +1,14 @@
+[Unit]
+Description=Pull latest camera snapshots from AIBOX checkers
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=boxtest2
+Group=boxtest2
+ExecStart=/usr/bin/python3 /usr/local/bin/aibox-snapshot-pull.py
+TimeoutStartSec=420
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

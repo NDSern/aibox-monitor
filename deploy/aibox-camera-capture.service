@@ -1,0 +1,18 @@
+[Unit]
+Description=AIBOX camera evidence capture (one substream archive frame + latest mainstream frame per camera)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=__CAMERA_USER__
+ExecStart=/usr/bin/python3 /usr/local/bin/aibox-camera-probe capture
+TimeoutStartSec=600
+Nice=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=__CAMERA_HOME__/aibox-camera-capture
+
+[Install]
+WantedBy=multi-user.target

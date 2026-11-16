@@ -1,0 +1,10 @@
+[Unit]
+Description=Run AIBOX camera capture every minute
+
+[Timer]
+OnCalendar=minutely
+AccuracySec=15s
+Unit=aibox-camera-capture.service
+
+[Install]
+WantedBy=timers.target

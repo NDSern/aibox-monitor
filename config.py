@@ -7,7 +7,7 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-PING_INTERVAL_SECONDS = 3 * 60
+PING_INTERVAL_SECONDS = 10 * 60
 PING_TIMEOUT_SECONDS = 2
 STATUS_SUMMARY_HOURS = {0, 6, 12, 18}
 CPU_THRESHOLD = 90
@@ -25,7 +25,7 @@ DEFAULT_RECIPIENT_EMAILS = [
     "huylq@vns.ai.vn",
 ]
 DEFAULT_AIBOXES = {
-    "100.64.0.49": "Cảng Gia Vũ - Hải Phòng",
+    "100.64.0.49": "Cảng Gia Minh - Hải Phòng",
 }
 AIBOXES_FILE = os.getenv("AIBOXES_FILE", "aiboxes.json")
 AIBOX_CONFIG_FILE = os.getenv("AIBOX_CONFIG_FILE", "config.json")
@@ -176,6 +176,9 @@ def _normalize_v2_config(value: dict) -> list[dict]:
         group_name = item.get("status_recipient_group") or default_status_group
         if not isinstance(group_name, str) or group_name not in recipient_groups:
             raise ValueError(f"v2 status_recipient_group for {item.get('name', '<unknown>')} must exist in recipient_groups")
+        target_interface = item.get("target-interface")
+        if target_interface is not None and (not isinstance(target_interface, str) or not target_interface):
+            raise ValueError(f"v2 target-interface for {item.get('name', '<unknown>')} must be a non-empty string")
         status_recipient_groups[item["ip"]] = group_name
 
     normalized = [
@@ -213,15 +216,18 @@ def _normalize_v2_config(value: dict) -> list[dict]:
 
     for scope in target_scopes:
         networks = [scope["id"]]
-        checkers = [
-            {
+        checkers = []
+        for item in aiboxes:
+            if not (item.get("check-devices", False) and any(network in item.get("networks", []) for network in networks)):
+                continue
+            checker = {
                 "name": item["name"],
                 "user": item.get("user", ""),
                 "ip": item["ip"],
             }
-            for item in aiboxes
-            if item.get("check-devices", False) and any(network in item.get("networks", []) for network in networks)
-        ]
+            if item.get("target-interface"):
+                checker["target-interface"] = item["target-interface"]
+            checkers.append(checker)
         recipients = scope["recipients"] if "recipients" in scope else default_recipients
         if not _is_valid_recipient_list(recipients, allow_empty=True):
             raise ValueError(f"v2 recipients for target scope {scope.get('name', '<unknown>')} must be a list of email strings")
@@ -334,7 +340,7 @@ def get_aibox_configs() -> list[dict]:
         configs.append(config_item)
     return configs
 
-DOWN_SUBJECT = "[CẢNH BÁO] AIBOX mất kết nối - Cảng Gia Vũ - Hải Phòng"
+DOWN_SUBJECT = "[CẢNH BÁO] AIBOX mất kết nối - Cảng Gia Minh - Hải Phòng"
 DOWN_BODY_TEMPLATE = """
 <html><body style="font-family:Arial,sans-serif;color:#1f2937;">
 <h2 style="color:#b91c1c;">AIBOX mất kết nối</h2>
@@ -347,7 +353,7 @@ DOWN_BODY_TEMPLATE = """
 </body></html>
 """
 
-UP_SUBJECT = "[KHÔI PHỤC] AIBOX đã kết nối lại - Cảng Gia Vũ - Hải Phòng"
+UP_SUBJECT = "[KHÔI PHỤC] AIBOX đã kết nối lại - Cảng Gia Minh - Hải Phòng"
 UP_BODY_TEMPLATE = """
 <html><body style="font-family:Arial,sans-serif;color:#1f2937;">
 <h2 style="color:#15803d;">AIBOX đã kết nối lại</h2>
@@ -373,7 +379,7 @@ AIBOX_STATUS_CHANGE_BODY_TEMPLATE = """
 </body></html>
 """
 
-STATUS_SUMMARY_SUBJECT = "[BÁO CÁO] Trạng thái AIBOX hiện tại - Cảng Gia Vũ - Hải Phòng"
+STATUS_SUMMARY_SUBJECT = "[BÁO CÁO] Trạng thái AIBOX hiện tại - Cảng Gia Minh - Hải Phòng"
 STATUS_SUMMARY_BODY_TEMPLATE = """
 <html><body style="font-family:Arial,sans-serif;color:#1f2937;">
 <h2 style="color:#1d4ed8;">Trạng thái AIBOX hiện tại</h2>

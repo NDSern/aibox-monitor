@@ -1,10 +1,12 @@
 import logging
+from logging.handlers import RotatingFileHandler
 import json
 import signal
 import socket
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from html import escape
 
@@ -15,12 +17,104 @@ logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL),
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.FileHandler(config.LOG_FILE),
+        RotatingFileHandler(config.LOG_FILE, maxBytes=16 * 1024 * 1024, backupCount=8, encoding="utf-8"),
         logging.StreamHandler(sys.stdout),
     ],
 )
 
 logger = logging.getLogger(__name__)
+
+SSH_OPTIONS = [
+    "-o", "BatchMode=yes",
+    "-o", "ConnectTimeout=5",
+    "-o", "StrictHostKeyChecking=accept-new",
+    "-o", "ControlMaster=auto",
+    "-o", "ControlPath=/tmp/aibox-monitor-ssh-%C",
+    "-o", "ControlPersist=5m",
+]
+
+CAMERA_IMAGE_OWNERS = {
+    "th06-lan": {f"192.168.0.{n}": "100.64.0.82" for n in range(65, 69)},
+    "th08-lan": {"192.168.0.66": "100.64.0.122", "192.168.0.67": "100.64.0.122",
+                 "192.168.0.68": "100.64.0.122", "192.168.0.105": "100.64.0.122"},
+    "giaminh-lan": {
+        "192.168.1.4": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.8": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.11": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.20": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.109": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.110": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.111": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.112": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.113": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.114": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.115": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.116": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.117": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.118": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.122": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.123": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.124": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.125": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.126": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.127": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.129": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.152": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.153": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.154": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.155": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.156": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.157": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.158": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.159": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.160": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.161": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.162": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.163": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.164": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.166": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.167": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.168": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.169": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.170": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.171": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.172": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.173": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.174": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.175": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.176": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.177": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.179": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.181": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.182": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.183": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.185": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.186": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.187": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.203": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.209": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.211": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+        "192.168.1.218": ("100.64.0.49", "100.64.0.96", "100.64.0.97"),
+    },
+    "kimhoa": {
+        "192.168.1.123": ("100.64.0.114", "100.64.0.115"), "192.168.1.126": ("100.64.0.114", "100.64.0.115"),
+        "192.168.1.124": ("100.64.0.114", "100.64.0.115"), "192.168.1.121": ("100.64.0.114", "100.64.0.115"),
+        "192.168.1.122": ("100.64.0.114", "100.64.0.115"), "192.168.1.125": ("100.64.0.114", "100.64.0.115"),
+        "192.168.1.127": ("100.64.0.114", "100.64.0.115"),
+    },
+    "td08-lan": {f"192.168.0.{n}": "100.64.0.27" for n in range(65, 68)},
+    "td09-lan": {f"192.168.0.{n}": "100.64.0.121" for n in range(65, 68)},
+    "th04-lan": {f"192.168.0.{n}": "100.64.0.1" for n in range(65, 69)},
+    "th07-lan": {f"192.168.0.{n}": "100.64.0.104" for n in range(65, 69)},
+    "th09-lan": {f"192.168.0.{n}": "100.64.0.123" for n in range(65, 69)},
+    "myxuan-lan": {f"192.168.2.{n}": ("100.64.0.116", "100.64.0.36", "100.64.0.65") for n in range(50, 61)},
+    "starcity-lan": {f"192.168.0.{n}": "100.64.0.44" for n in range(65, 71)},
+    "oceanus-lan": {f"192.168.0.{n}": "100.64.0.80" for n in (65, 66, 67, 68, 69, 70)},
+    "neptune-lan": {f"192.168.1.{n}": "100.64.0.85" for n in (65, 66, 67, 68, 69, 71, 72, 73, 74)},
+    "th05-lan": {f"192.168.0.{n}": "100.64.0.81" for n in range(65, 69)},
+}
+CAMERA_PROBE_ONLINE_MINIMUM = 5
+CAMERA_PROBE_WORKERS = 6
 
 
 class AiboxMonitor:
@@ -28,6 +122,8 @@ class AiboxMonitor:
         self.email_alert = EmailAlert()
         self.aibox_status = {}
         self.target_status = {}
+        self.target_last_known_status = {}
+        self.unknown_target_status = set()
         self.resource_status = {}
         self.last_status_summary_slot = None
         self.running = False
@@ -184,8 +280,13 @@ class AiboxMonitor:
     def _target_key(aibox_ip: str, target_ip: str) -> str:
         return f"{aibox_ip}:{target_ip}"
 
-    def _select_target_checker(self, aibox: dict) -> dict | None:
-        checkers = aibox.get("checkers") or [{"name": aibox["name"], "user": aibox["user"], "ip": aibox["ip"]}]
+    def _select_target_checker(self, aibox: dict, target_ip: str | None = None) -> dict | None:
+        checkers = aibox.get("checkers") or [{
+            "name": aibox["name"],
+            "user": aibox["user"],
+            "ip": aibox["ip"],
+            "target-interface": aibox.get("target-interface"),
+        }]
         for checker in checkers:
             checker_ip = checker["ip"]
             checker_user = checker["user"]
@@ -195,6 +296,17 @@ class AiboxMonitor:
             if not self._can_ssh(checker_user, checker_ip):
                 logger.warning(f"Skipping target checker because SSH is unavailable: {checker_user}@{checker_ip}")
                 continue
+            target_interface = checker.get("target-interface")
+            if target_interface and (target_ip or aibox.get("targets")):
+                route_target = target_ip or next(iter(aibox["targets"]))
+                route_interface = self._target_route_interface(checker_user, checker_ip, route_target)
+                if route_interface != target_interface:
+                    logger.warning(
+                        f"Skipping target checker because target LAN is unavailable: {aibox['name']} via "
+                        f"{checker.get('name', checker_ip)} ({checker_ip}); target {route_target} expected interface "
+                        f"{target_interface}, got {route_interface or 'none'}"
+                    )
+                    continue
             return checker
         return None
 
@@ -211,12 +323,7 @@ class AiboxMonitor:
             result = subprocess.run(
                 [
                     "ssh",
-                    "-o",
-                    "BatchMode=yes",
-                    "-o",
-                    "ConnectTimeout=5",
-                    "-o",
-                    "StrictHostKeyChecking=accept-new",
+                    *SSH_OPTIONS,
                     f"{user}@{aibox_ip}",
                     "true",
                 ],
@@ -230,17 +337,41 @@ class AiboxMonitor:
             return False
 
     @staticmethod
+    def _target_route_interface(user: str, aibox_ip: str, target_ip: str) -> str | None:
+        try:
+            result = subprocess.run(
+                [
+                    "ssh",
+                    *SSH_OPTIONS,
+                    f"{user}@{aibox_ip}",
+                    "ip",
+                    "-json",
+                    "route",
+                    "get",
+                    target_ip,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode != 0:
+                return None
+            routes = json.loads(result.stdout)
+            if not isinstance(routes, list) or not routes:
+                return None
+            interface = routes[0].get("dev")
+            return interface if isinstance(interface, str) and interface else None
+        except (json.JSONDecodeError, subprocess.TimeoutExpired, OSError) as e:
+            logger.warning(f"Failed target route check for {target_ip} from AIBOX {aibox_ip}: {e}")
+            return None
+
+    @staticmethod
     def _ping_target_from_aibox(user: str, aibox_ip: str, target_ip: str) -> bool:
         try:
             result = subprocess.run(
                 [
                     "ssh",
-                    "-o",
-                    "BatchMode=yes",
-                    "-o",
-                    "ConnectTimeout=5",
-                    "-o",
-                    "StrictHostKeyChecking=accept-new",
+                    *SSH_OPTIONS,
                     f"{user}@{aibox_ip}",
                     "ping",
                     "-c",
@@ -257,6 +388,32 @@ class AiboxMonitor:
         except (subprocess.TimeoutExpired, OSError) as e:
             logger.warning(f"Failed to ping target {target_ip} from AIBOX {aibox_ip}: {e}")
             return False
+
+    @staticmethod
+    def _probe_camera_from_aibox(user: str, aibox_ip: str, target_ip: str) -> dict | None:
+        try:
+            result = subprocess.run(
+                ["ssh", *SSH_OPTIONS, f"{user}@{aibox_ip}", "python3", "/usr/local/bin/aibox-camera-probe", "probe", target_ip],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=90,
+            )
+            if result.returncode != 0:
+                return {"status": "fallback", "method": "probe-unavailable"}
+            value = json.loads(result.stdout)
+            if not isinstance(value, dict):
+                return {"status": "fallback", "method": "probe-unavailable"}
+            if (value.get("status") in ("online", "offline") and value.get("method") == "image"
+                    and isinstance(value.get("frames"), int) and 0 <= value["frames"] <= 10
+                    and isinstance(value.get("valid_frames"), int) and 0 <= value["valid_frames"] <= value["frames"]
+                    and (value["status"] == "online") == (value["valid_frames"] > 0)):
+                return value
+            if value.get("status") == "fallback":
+                return value
+            return {"status": "fallback", "method": "probe-unavailable"}
+        except (json.JSONDecodeError, subprocess.TimeoutExpired, OSError, AttributeError):
+            return {"status": "fallback", "method": "probe-unavailable"}
 
     @staticmethod
     def _collect_resources_from_aibox(user: str, aibox_ip: str) -> dict[str, float] | None:
@@ -312,12 +469,7 @@ print(json.dumps({
             result = subprocess.run(
                 [
                     "ssh",
-                    "-o",
-                    "BatchMode=yes",
-                    "-o",
-                    "ConnectTimeout=5",
-                    "-o",
-                    "StrictHostKeyChecking=accept-new",
+                    *SSH_OPTIONS,
                     f"{user}@{aibox_ip}",
                     "python3",
                     "-",
@@ -345,8 +497,8 @@ print(json.dumps({
             return config.RAM_THRESHOLD
         return config.NPU_THRESHOLD
 
-    @staticmethod
     def _build_target_rows(
+        self,
         targets: dict[str, str],
         target_status: dict[str, bool],
         changed_statuses: dict[str, str],
@@ -357,8 +509,14 @@ print(json.dumps({
             key = AiboxMonitor._target_key(aibox_ip, target_ip)
             changed_status = changed_statuses.get(target_ip)
             status = changed_status
-            is_online = target_status.get(key)
-            if status is None and is_online is not None:
+            is_online = self._current_target_status(key)
+            is_unknown = key in self.unknown_target_status
+            if is_online is None:
+                is_online = self.target_last_known_status.get(key)
+            if status is None and is_unknown:
+                last_known = "Đang kết nối" if is_online else "Mất kết nối" if is_online is not None else "Chưa ghi nhận"
+                status = f"Không xác định (lần cuối: {last_known})"
+            elif status is None and is_online is not None:
                 status = "Đang kết nối" if is_online else "Mất kết nối"
             if status is None:
                 status = "Chưa ghi nhận"
@@ -645,51 +803,139 @@ print(json.dumps({
             if aibox["local"]:
                 logger.info(f"Skipping local target checks: {aibox['name']}")
                 continue
-            checker = self._select_target_checker(aibox)
-            if checker is None:
-                logger.warning(f"Skipping target checks because no checker is available: {aibox['name']}")
-                continue
-            aibox_ip = checker["ip"]
-            user = checker["user"]
             status_key = self._target_status_key(aibox)
-            send_recovery_result = aibox_ip in recovered_aibox_ips
-            email_aibox = {**aibox, "ip": aibox_ip, "user": user}
-
             newly_down = {}
             back_up = {}
+            changed_statuses = {}
+            checker_changes = {}
+            checkers_by_ip = {}
+            targets_by_checker = {}
+            checked_targets = 0
+            available_checkers = {}
+            default_checker_loaded = False
+            default_checker = None
+            default_checked_targets = []
+            logger.info(f"Target checks started from {aibox['name']}: {len(aibox['targets'])} target(s)")
+            plans = []
             for target_ip, target_name in aibox["targets"].items():
-                is_online = self._ping_target_from_aibox(user, aibox_ip, target_ip)
+                owners = CAMERA_IMAGE_OWNERS.get(aibox.get("id"), {}).get(target_ip)
+                owner_ips = (owners,) if isinstance(owners, str) else tuple(owners or ())
+                owner_ip = owner_ips[0] if owner_ips else None
+                checker = None
+                for candidate_ip in owner_ips:
+                    checker_config = next((item for item in aibox.get("checkers", []) if item["ip"] == candidate_ip), None)
+                    if not checker_config:
+                        continue
+                    if candidate_ip not in available_checkers:
+                        selected = self._select_target_checker({**aibox, "checkers": [checker_config]}, target_ip)
+                        available_checkers[candidate_ip] = selected or False
+                    if available_checkers[candidate_ip]:
+                        checker = available_checkers[candidate_ip]
+                        break
+                if owner_ip:
+                    if checker is None:
+                        self._record_target_unknown(status_key, aibox, target_name, target_ip)
+                        continue
+                if checker is None and not owner_ip:
+                    if not default_checker_loaded:
+                        default_checker = self._select_target_checker(aibox, target_ip)
+                        default_checker_loaded = True
+                        if default_checker:
+                            available_checkers[default_checker["ip"]] = default_checker
+                    checker = default_checker
+                if checker is None:
+                    self._record_target_unknown(status_key, aibox, target_name, target_ip)
+                    continue
+
+                aibox_ip, user = checker["ip"], checker["user"]
+                checkers_by_ip[aibox_ip] = checker
+                targets_by_checker.setdefault(aibox_ip, {})[target_ip] = target_name
+                if not owner_ip:
+                    default_checked_targets.append(target_ip)
+                plans.append({"target_ip": target_ip, "target_name": target_name, "checker": checker, "owner": owner_ip})
+
+            def run_plan(plan):
+                checker = plan["checker"]
+                probe = (self._probe_camera_from_aibox(checker["user"], checker["ip"], plan["target_ip"])
+                         if plan["owner"] else None)
+                if probe and probe.get("status") in ("online", "offline"):
+                    return plan, probe["status"] == "online", "image", probe.get("valid_frames"), probe.get("frames")
+                is_online = self._ping_target_from_aibox(checker["user"], checker["ip"], plan["target_ip"])
+                return plan, is_online, "ping-fallback" if plan["owner"] else "ping", None, None
+
+            results = []
+            if plans:
+                with ThreadPoolExecutor(max_workers=CAMERA_PROBE_WORKERS) as pool:
+                    results = list(pool.map(run_plan, plans))
+            checked_targets = len(results)
+            for plan, is_online, method, valid_frames, frames_total in results:
+                target_ip = plan["target_ip"]
+                target_name = plan["target_name"]
+                quality_tag = ""
+                if valid_frames is not None and frames_total:
+                    quality_tag = f"[valid={valid_frames}/{frames_total}]"
                 key = self._target_key(status_key, target_ip)
-                was_online = self.target_status.get(key)
+                was_online = self.target_last_known_status.get(key, self.target_status.get(key))
                 state = "online" if is_online else "offline"
+                target_change = None
 
                 if was_online is None:
-                    logger.info(f"Initial target state from {aibox['name']}: {target_name} ({target_ip}) is {state}")
+                    logger.info(f"Initial target state from {aibox['name']}: {target_name} ({target_ip}) is {state} [method={method}]{quality_tag}")
                 elif was_online and not is_online:
-                    logger.warning(f"Target offline from {aibox['name']}: {target_name} ({target_ip})")
+                    logger.warning(f"Target offline from {aibox['name']}: {target_name} ({target_ip}) [method={method}]{quality_tag}")
                     newly_down[target_ip] = "Mất kết nối"
+                    target_change = newly_down[target_ip]
                 elif not was_online and is_online:
-                    logger.info(f"Target back online from {aibox['name']}: {target_name} ({target_ip})")
+                    logger.info(f"Target back online from {aibox['name']}: {target_name} ({target_ip}) [method={method}]{quality_tag}")
                     back_up[target_ip] = "Đã kết nối lại"
+                    target_change = back_up[target_ip]
                 else:
-                    logger.info(f"Target unchanged from {aibox['name']}: {target_name} ({target_ip}) is {state}")
+                    logger.info(f"Target unchanged from {aibox['name']}: {target_name} ({target_ip}) is {state} [method={method}]{quality_tag}")
 
                 self.target_status[key] = is_online
+                self.target_last_known_status[key] = is_online
+                self.unknown_target_status.discard(key)
+                if target_change:
+                    changed_statuses[target_ip] = target_change
+                    checker_changes.setdefault(aibox_ip, {})[target_ip] = target_change
+            if checked_targets:
+                logger.info(f"Target checks completed from {aibox['name']}: {checked_targets} target(s)")
+            else:
+                self._scope_unknown(aibox, "no checker available")
+            email_checker_ips = set(checker_changes)
+            email_checker_ips.update(checker_ip for checker_ip in targets_by_checker if checker_ip in recovered_aibox_ips)
+            for checker_ip in email_checker_ips:
+                checker = checkers_by_ip.get(checker_ip)
+                if not checker:
+                    continue
+                email_aibox = {
+                    **aibox,
+                    "ip": checker["ip"],
+                    "user": checker["user"],
+                    "targets": targets_by_checker[checker_ip],
+                }
+                changes = checker_changes.get(checker_ip, {})
+                if checker_ip in recovered_aibox_ips:
+                    self._send_target_recovery_check_result_email(email_aibox, timestamp, changes)
+                elif changes:
+                    self._send_target_status_change_email(email_aibox, timestamp, changes)
 
-            if newly_down:
-                logger.info(f"Queued target down changes for {aibox['name']}: {len(newly_down)}")
-            if back_up:
-                logger.info(f"Queued target recovery changes for {aibox['name']}: {len(back_up)}")
-            changed_statuses = {**newly_down, **back_up}
-            if send_recovery_result:
-                logger.info(
-                    f"Sending target recovery check result email for {aibox['name']}: "
-                    f"{len(aibox['targets'])} target(s), {len(changed_statuses)} change(s)"
-                )
-                self._send_target_recovery_check_result_email(email_aibox, timestamp, changed_statuses)
-            elif changed_statuses:
-                logger.info(f"Sending batched target status-change email for {aibox['name']}: {len(changed_statuses)} change(s)")
-                self._send_target_status_change_email(email_aibox, timestamp, changed_statuses)
+    def _record_target_unknown(self, status_key: str, aibox: dict, target_name: str, target_ip: str) -> None:
+        key = self._target_key(status_key, target_ip)
+        if key not in self.unknown_target_status:
+            logger.info(f"Target state unknown from {aibox['name']}: {target_name} ({target_ip}) [method=unknown]")
+        self.unknown_target_status.add(key)
+
+    def _current_target_status(self, key: str):
+        if key in self.unknown_target_status:
+            return None
+        return self.target_status.get(key)
+
+    def _scope_unknown(self, aibox: dict, reason: str) -> None:
+        status_key = self._target_status_key(aibox)
+        for target_ip, target_name in aibox.get("targets", {}).items():
+            self._record_target_unknown(status_key, aibox, target_name, target_ip)
+        logger.warning(f"Target checks unavailable from {aibox['name']}: {reason}")
 
     def check_aibox_resources(self) -> None:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -704,14 +950,12 @@ print(json.dumps({
 
             aibox_ip = aibox["ip"]
             user = aibox["user"]
-            if not self._ping_host(aibox_ip):
+            is_online = self.aibox_status.get(aibox_ip)
+            if is_online is None:
+                is_online = self._ping_host(aibox_ip)
+                self.aibox_status[aibox_ip] = is_online
+            if not is_online:
                 logger.warning(f"Skipping resource checks because AIBOX is offline: {aibox['name']} ({aibox_ip})")
-                self.aibox_status[aibox_ip] = False
-                continue
-            self.aibox_status[aibox_ip] = True
-
-            if not self._can_ssh(user, aibox_ip):
-                logger.warning(f"Skipping resource checks because SSH is unavailable: {user}@{aibox_ip}")
                 continue
 
             resources = self._collect_resources_from_aibox(user, aibox_ip)

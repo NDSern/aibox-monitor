@@ -417,7 +417,7 @@ def test_status_summary_sends_for_each_scope(monkeypatch):
 
     monkeypatch.setattr(config, "get_aibox_configs", lambda: _direct_config() + _target_config())
     _set_now(monkeypatch, datetime(2026, 5, 15, 18, 0, 0))
-    monkeypatch.setattr(monitor, "_can_ssh", lambda *args: True)
+    monkeypatch.setattr(monitor, "_can_ssh", lambda user, ip: True)
     monkeypatch.setattr(monitor, "_send_status_summary_email", lambda *args: local_sent.append(args))
     monkeypatch.setattr(monitor, "_send_target_status_summary_email", lambda *args: target_sent.append(args))
     monkeypatch.setattr(monitor, "_send_resource_status_summary_email", lambda *args: resource_sent.append(args))
@@ -571,6 +571,189 @@ def test_check_aibox_targets_skips_when_ssh_unavailable(monkeypatch):
     assert monitor.target_status == {}
 
 
+def test_unknown_target_preserves_last_known_and_does_not_email(monkeypatch):
+    monitor = AiboxMonitor()
+    monitor.target_status = {"192.0.2.10:192.0.2.20": False}
+    monitor.target_last_known_status = dict(monitor.target_status)
+    monitor.aibox_status = {"192.0.2.10": True}
+    sent = []
+    target_config = _target_config()
+    target_config[0]["checkers"] = [{"name": "Box 1", "user": "linaro", "ip": "192.0.2.10"}]
+
+    monkeypatch.setattr(config, "get_aibox_configs", lambda: target_config)
+    monkeypatch.setattr(monitor, "_can_ssh", lambda *args: False)
+    monkeypatch.setattr(monitor, "_send_target_status_change_email", lambda *args: sent.append(args))
+
+    monitor.check_aibox_targets()
+
+    assert monitor.target_status["192.0.2.10:192.0.2.20"] is False
+    assert "192.0.2.10:192.0.2.20" in monitor.unknown_target_status
+    assert sent == []
+
+
+def test_unknown_then_offline_is_still_reported_as_a_transition(monkeypatch):
+    monitor = AiboxMonitor()
+    key = "192.0.2.10:192.0.2.20"
+    monitor.target_status[key] = True
+    monitor.target_last_known_status[key] = True
+    monitor.unknown_target_status.add(key)
+    monitor.aibox_status = {"192.0.2.10": True}
+    sent = []
+
+    monkeypatch.setattr(config, "get_aibox_configs", _target_config)
+    monkeypatch.setattr(monitor, "_can_ssh", lambda *args: True)
+    monkeypatch.setattr(monitor, "_ping_target_from_aibox", lambda user, box_ip, ip: ip == "192.0.2.21")
+    monkeypatch.setattr(monitor, "_send_target_status_change_email", lambda *args: sent.append(args))
+
+    monitor.check_aibox_targets()
+
+    assert len(sent) == 1
+    assert sent[0][2] == {"192.0.2.20": "Mất kết nối"}
+    assert key not in monitor.unknown_target_status
+
+
+def test_non_profile_targets_use_ping(monkeypatch):
+    monitor = AiboxMonitor()
+    monitor.aibox_status = {"192.0.2.10": True}
+    target_config = _target_config()
+    target_config[0]["checkers"] = [{"name": "Box 1", "user": "linaro", "ip": "192.0.2.10"}]
+    probes = []
+    pings = []
+
+    monkeypatch.setattr(config, "get_aibox_configs", lambda: target_config)
+    monkeypatch.setattr(monitor, "_can_ssh", lambda *args: True)
+    monkeypatch.setattr(monitor, "_probe_camera_from_aibox", lambda user, box_ip, ip: probes.append(ip) or {"status": "online", "method": "image"})
+    monkeypatch.setattr(monitor, "_ping_target_from_aibox", lambda user, box_ip, ip: pings.append(ip) or True)
+
+    monitor.check_aibox_targets()
+
+    assert probes == []
+    assert pings == ["192.0.2.20", "192.0.2.21"]
+
+
+def test_configured_camera_probe_can_fall_back_to_ping(monkeypatch):
+    monitor = AiboxMonitor()
+    monitor.aibox_status = {"100.64.0.114": True}
+    target_config = _target_config()
+    target_config[0]["checkers"] = [{"name": "Kim Hoa", "user": "camera", "ip": "100.64.0.114"}]
+    target_config[0]["targets"] = {"192.168.1.123": "Camera"}
+    pings = []
+    monkeypatch.setattr(config, "get_aibox_configs", lambda: target_config)
+    monkeypatch.setattr(monitor, "_can_ssh", lambda *args: True)
+    monkeypatch.setattr(monitor, "_probe_camera_from_aibox", lambda *args: {"status": "fallback", "method": "unsupported"})
+    monkeypatch.setattr(monitor, "_ping_target_from_aibox", lambda user, box_ip, ip: pings.append(ip) or True)
+    monitor.check_aibox_targets()
+    assert pings == ["192.168.1.123"]
+    assert monitor.target_status["192.0.2.10:192.168.1.123"] is True
+
+
+def test_image_camera_owner_is_scope_limited_and_zero_checks_unknown(monkeypatch):
+    monitor = AiboxMonitor()
+    monitor.aibox_status = {"100.64.0.114": False}
+    target_config = _target_config()
+    target_config[0].update({"id": "kimhoa", "checkers": [{"name": "Camera AIBOX", "user": "camera", "ip": "100.64.0.114"}], "targets": {"192.168.1.123": "Camera"}})
+    monkeypatch.setattr(config, "get_aibox_configs", lambda: target_config)
+    monitor.check_aibox_targets()
+    assert monitor._current_target_status("kimhoa:192.168.1.123") is None
+
+    # Same private camera address on a different scope remains ordinary ping fallback.
+    target_config[0]["id"] = "other-scope"
+    monitor.aibox_status["192.0.2.10"] = True
+    calls = []
+    monkeypatch.setattr(monitor, "_select_target_checker", lambda *_: {"ip": "192.0.2.10", "user": "linaro"})
+    monkeypatch.setattr(monitor, "_ping_target_from_aibox", lambda *args: calls.append(args) or True)
+    monitor.check_aibox_targets()
+    assert len(calls) == 1
+
+
+def test_camera_probe_partial_frames_preserved_and_missing_tool_falls_back(monkeypatch):
+    from main import AiboxMonitor
+    import json
+
+    class Result:
+        returncode = 0
+        stdout = json.dumps({"method": "image", "status": "online", "frames": 3, "valid_frames": 1})
+
+    monkeypatch.setattr("main.subprocess.run", lambda *args, **kwargs: Result())
+    assert AiboxMonitor._probe_camera_from_aibox("camera", "100.64.0.114", "192.168.1.123")["valid_frames"] == 1
+
+    class ErrorResult:
+        returncode = 0
+        stdout = "[]"
+
+    monkeypatch.setattr("main.subprocess.run", lambda *args, **kwargs: ErrorResult())
+    assert AiboxMonitor._probe_camera_from_aibox("camera", "100.64.0.114", "192.168.1.123")["status"] == "fallback"
+
+
+def test_check_aibox_targets_skips_when_target_route_uses_wrong_interface(monkeypatch):
+    monitor = AiboxMonitor()
+    monitor.aibox_status = {"192.0.2.10": True}
+    target_config = _target_config()
+    target_config[0]["target-interface"] = "eth0"
+    pings = []
+
+    monkeypatch.setattr(config, "get_aibox_configs", lambda: target_config)
+    monkeypatch.setattr(monitor, "_can_ssh", lambda *args: True)
+    monkeypatch.setattr(monitor, "_target_route_interface", lambda *args: "usb0")
+    monkeypatch.setattr(monitor, "_ping_target_from_aibox", lambda *args: pings.append(args) or True)
+
+    monitor.check_aibox_targets()
+
+    assert pings == []
+    assert monitor.target_status == {}
+
+
+def test_target_checker_tries_next_checker_after_route_mismatch(monkeypatch):
+    monitor = AiboxMonitor()
+    monitor.aibox_status = {"192.0.2.10": True, "192.0.2.11": True}
+    target_config = _target_config()[0]
+    target_config["checkers"] = [
+        {"name": "Box 1", "user": "linaro", "ip": "192.0.2.10", "target-interface": "eth0"},
+        {"name": "Box 2", "user": "linaro", "ip": "192.0.2.11", "target-interface": "eth0"},
+    ]
+
+    monkeypatch.setattr(monitor, "_can_ssh", lambda *args: True)
+    monkeypatch.setattr(
+        monitor,
+        "_target_route_interface",
+        lambda user, aibox_ip, target_ip: {"192.0.2.10": "usb0", "192.0.2.11": "eth0"}[aibox_ip],
+    )
+
+    assert monitor._select_target_checker(target_config)["ip"] == "192.0.2.11"
+
+
+def test_target_route_interface_reads_json_route(monkeypatch):
+    monitor = AiboxMonitor()
+
+    class Result:
+        returncode = 0
+        stdout = '[{"dst":"192.0.2.20","dev":"eth0","prefsrc":"192.0.2.10"}]'
+
+    monkeypatch.setattr("main.subprocess.run", lambda *args, **kwargs: Result())
+
+    assert monitor._target_route_interface("linaro", "192.0.2.10", "192.0.2.20") == "eth0"
+
+
+def test_ssh_commands_reuse_one_connection(monkeypatch):
+    monitor = AiboxMonitor()
+    commands = []
+
+    class Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr("main.subprocess.run", lambda command, **kwargs: commands.append(command) or Result())
+
+    assert monitor._can_ssh("linaro", "192.0.2.10")
+    assert monitor._ping_target_from_aibox("linaro", "192.0.2.10", "192.0.2.20")
+
+    for command in commands:
+        assert "ControlMaster=auto" in command
+        assert "ControlPath=/tmp/aibox-monitor-ssh-%C" in command
+        assert "ControlPersist=5m" in command
+
+
 def test_check_aibox_targets_pings_targets_from_aibox_without_local_precheck(monkeypatch):
     monitor = AiboxMonitor()
     monitor.aibox_status = {"192.0.2.10": True}
@@ -633,7 +816,7 @@ def test_check_aibox_targets_sends_recovery_result_without_status_change(monkeyp
     status_changes = []
 
     monkeypatch.setattr(config, "get_aibox_configs", _target_config)
-    monkeypatch.setattr(monitor, "_can_ssh", lambda *args: True)
+    monkeypatch.setattr(monitor, "_can_ssh", lambda user, ip: True)
     monkeypatch.setattr(monitor, "_ping_target_from_aibox", lambda *args: True)
     monkeypatch.setattr(monitor, "_send_target_recovery_check_result_email", lambda *args: recovery_results.append(args))
     monkeypatch.setattr(monitor, "_send_target_status_change_email", lambda *args: status_changes.append(args))
@@ -799,6 +982,28 @@ def test_check_aibox_resources_uses_check_resource_not_check_devices(monkeypatch
     assert sent[0][3] == {"CPU": 91.0, "RAM": 92.0}
 
 
+def test_check_aibox_resources_reuses_connectivity_status(monkeypatch):
+    monitor = AiboxMonitor()
+    monitor.aibox_status = {"192.0.2.10": True}
+    pings = []
+    collected = []
+    configs = _target_config()
+    configs[0]["check-resource"] = True
+
+    monkeypatch.setattr(config, "get_aibox_configs", lambda: configs)
+    monkeypatch.setattr(monitor, "_ping_host", lambda ip: pings.append(ip) or True)
+    monkeypatch.setattr(
+        monitor,
+        "_collect_resources_from_aibox",
+        lambda *args: collected.append(args) or {"CPU": 1.0, "RAM": 2.0},
+    )
+
+    monitor.check_aibox_resources()
+
+    assert pings == []
+    assert collected == [("linaro", "192.0.2.10")]
+
+
 def test_collect_resources_sends_script_over_stdin(monkeypatch):
     calls = []
 
@@ -876,8 +1081,8 @@ def test_send_all_email_result_templates(monkeypatch):
     timestamp = "2026-05-21 15:00:00"
     recipients = ["sondn@vns.ai.vn"]
     aibox_targets = {
-        "100.64.0.49": "Cảng Gia Vũ - Hải Phòng - Cân 1",
-        "100.64.0.92": "Cảng Gia Vũ - Hải Phòng - Cân 2",
+        "100.64.0.49": "Cảng Gia Minh - Hải Phòng - Cân 1",
+        "100.64.0.92": "Cảng Gia Minh - Hải Phòng - Cân 2",
         "100.64.0.65": "Cảng Mỹ Xuân A - Vũng Tàu",
     }
     local_scope = {
@@ -886,8 +1091,8 @@ def test_send_all_email_result_templates(monkeypatch):
         "targets": aibox_targets,
     }
     target_scope = {
-        "id": "giavu-lan",
-        "name": "Cảng Gia Vũ - Hải Phòng",
+        "id": "giaminh-lan",
+        "name": "Cảng Gia Minh - Hải Phòng",
         "ip": "100.64.0.49",
         "recipients": recipients,
         "targets": {
@@ -897,21 +1102,21 @@ def test_send_all_email_result_templates(monkeypatch):
         },
     }
     resource_scope = {
-        "name": "Cảng Gia Vũ - Hải Phòng - Cân 1",
+        "name": "Cảng Gia Minh - Hải Phòng - Cân 1",
         "recipients": recipients,
     }
     resources = {"CPU": 91.0, "RAM": 92.0, "NPU Core 0": 10.0, "NPU Core 1": 95.0, "NPU Core 2": 0.0}
     over_threshold = {"CPU": 91.0, "RAM": 92.0, "NPU Core 1": 95.0}
     monitor.aibox_status = {"100.64.0.49": False, "100.64.0.92": True, "100.64.0.65": True}
     monitor.target_status = {
-        "giavu-lan:192.168.1.103": False,
-        "giavu-lan:192.168.1.34": True,
-        "giavu-lan:192.168.1.101": True,
+        "giaminh-lan:192.168.1.103": False,
+        "giaminh-lan:192.168.1.34": True,
+        "giaminh-lan:192.168.1.101": True,
     }
 
     senders = [
-        lambda: monitor._send_down_email("100.64.0.49", "Cảng Gia Vũ - Hải Phòng - Cân 1", "Tất cả AIBOX", timestamp, recipients, aibox_targets),
-        lambda: monitor._send_up_email("100.64.0.49", "Cảng Gia Vũ - Hải Phòng - Cân 1", "Tất cả AIBOX", timestamp, recipients, aibox_targets),
+        lambda: monitor._send_down_email("100.64.0.49", "Cảng Gia Minh - Hải Phòng - Cân 1", "Tất cả AIBOX", timestamp, recipients, aibox_targets),
+        lambda: monitor._send_up_email("100.64.0.49", "Cảng Gia Minh - Hải Phòng - Cân 1", "Tất cả AIBOX", timestamp, recipients, aibox_targets),
         lambda: monitor._send_aibox_status_change_email(local_scope, timestamp, {"100.64.0.49": "Mất kết nối", "100.64.0.92": "Đã kết nối lại"}),
         lambda: monitor._send_status_summary_email(timestamp, recipients, aibox_targets),
         lambda: monitor._send_target_down_email(target_scope, timestamp, {"192.168.1.103": "Mất kết nối"}),
@@ -933,14 +1138,30 @@ def test_send_all_email_result_templates(monkeypatch):
     assert config.UP_SUBJECT in subjects
     assert config.STATUS_SUMMARY_SUBJECT in subjects
     assert "[CẢNH BÁO] Tổng hợp thay đổi trạng thái AIBOX - Tất cả AIBOX" in subjects
-    assert "[CẢNH BÁO] Tổng hợp thay đổi các thiết bị ở Cảng Gia Vũ - Hải Phòng" in subjects
-    assert "[THÔNG TIN] Kết quả kiểm tra thiết bị sau khi AIBOX khôi phục - Cảng Gia Vũ - Hải Phòng" in subjects
-    assert "[BÁO CÁO] Trạng thái thiết bị sau AIBOX hiện tại - Cảng Gia Vũ - Hải Phòng" in subjects
-    assert "[CẢNH BÁO] Tài nguyên AIBOX vượt ngưỡng - Cảng Gia Vũ - Hải Phòng - Cân 1" in subjects
-    assert "[BÁO CÁO] Tài nguyên AIBOX hiện tại - Cảng Gia Vũ - Hải Phòng - Cân 1" in subjects
+    assert "[CẢNH BÁO] Tổng hợp thay đổi các thiết bị ở Cảng Gia Minh - Hải Phòng" in subjects
+    assert "[THÔNG TIN] Kết quả kiểm tra thiết bị sau khi AIBOX khôi phục - Cảng Gia Minh - Hải Phòng" in subjects
+    assert "[BÁO CÁO] Trạng thái thiết bị sau AIBOX hiện tại - Cảng Gia Minh - Hải Phòng" in subjects
+    assert "[CẢNH BÁO] Tài nguyên AIBOX vượt ngưỡng - Cảng Gia Minh - Hải Phòng - Cân 1" in subjects
+    assert "[BÁO CÁO] Tài nguyên AIBOX hiện tại - Cảng Gia Minh - Hải Phòng - Cân 1" in subjects
     assert all(recipients == ["sondn@vns.ai.vn"] for _, _, recipients in sent)
     assert "Mất kết nối" in bodies
     assert "Đã kết nối lại" in bodies
     assert "Đang kết nối" in bodies
     assert "Vượt ngưỡng" in bodies
     assert "Bình thường" in bodies
+
+def test_image_camera_falls_back_to_next_owner(monkeypatch):
+    monitor = AiboxMonitor()
+    monitor.aibox_status = {"100.64.0.116": False, "100.64.0.36": True, "100.64.0.65": True}
+    target_config = _target_config()
+    target_config[0].update({"id": "myxuan-lan", "targets": {"192.168.2.55": "Camera"}, "checkers": [
+        {"name": "A1", "user": "a1", "ip": "100.64.0.65"},
+        {"name": "A2", "user": "a2", "ip": "100.64.0.116"},
+        {"name": "A3", "user": "a3", "ip": "100.64.0.36"},
+    ]})
+    probes = []
+    monkeypatch.setattr(config, "get_aibox_configs", lambda: target_config)
+    monkeypatch.setattr(monitor, "_can_ssh", lambda *args: True)
+    monkeypatch.setattr(monitor, "_probe_camera_from_aibox", lambda user, box_ip, ip: probes.append(box_ip) or {"status": "online", "method": "image", "frames": 10, "valid_frames": 10})
+    monitor.check_aibox_targets()
+    assert probes == ["100.64.0.36"]

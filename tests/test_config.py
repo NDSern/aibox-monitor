@@ -418,3 +418,49 @@ def test_v2_config_missing_recipients_still_fall_back_to_defaults(tmp_path, monk
     assert configs[0]["recipients"] == ["status@example.com"]
     assert configs[1]["recipients"] == ["default@example.com"]
     assert configs[2]["recipients"] == ["default@example.com"]
+
+
+def test_v2_config_propagates_target_interface_to_scope_checker(tmp_path, monkeypatch):
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "recipient_groups": {"aibox_report": ["status@example.com"]},
+                "default_recipients": ["default@example.com"],
+                "aiboxes": [
+                    {
+                        "id": "box-1",
+                        "name": "Box 1",
+                        "user": "linaro",
+                        "ip": "192.0.2.10",
+                        "check-devices": True,
+                        "target-interface": "eth0",
+                        "networks": ["site-1"],
+                    }
+                ],
+                "target_scopes": [
+                    {
+                        "id": "site-1",
+                        "name": "Site 1",
+                        "targets": {"192.0.2.20": "Camera 1"},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(config, "AIBOX_CONFIG_FILE", str(path))
+    monkeypatch.setattr(config, "_aibox_config_cache", [])
+
+    configs = config.get_aibox_configs()
+
+    assert configs[2]["checkers"] == [
+        {
+            "name": "Box 1",
+            "user": "linaro",
+            "ip": "192.0.2.10",
+            "target-interface": "eth0",
+        }
+    ]

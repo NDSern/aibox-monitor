@@ -1,0 +1,10 @@
+[Unit]
+Description=Pull camera snapshots every minute
+
+[Timer]
+OnCalendar=minutely
+AccuracySec=15s
+Unit=aibox-snapshot-pull.service
+
+[Install]
+WantedBy=timers.target
