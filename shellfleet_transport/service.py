@@ -182,7 +182,10 @@ class Adapter:
         try:
             size = self.hub.download(agent, path, destination, timeout=timeout)
         except TransportError as exc:
-            if exc.reason in ("command-timeout", "agent-unreachable", "transfer-failed"):
+            # transfer-failed is usually a size/truncation artifact, not a device
+            # fault; the shim retries those over ssh, so it must not trip the
+            # cooldown and block the working downloads that follow.
+            if exc.reason in ("command-timeout", "agent-unreachable"):
                 self._mark_degraded(degraded, exc.reason)
             raise
         with self._degraded_lock:
