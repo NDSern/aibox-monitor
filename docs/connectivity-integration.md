@@ -31,7 +31,7 @@ dashboard origin; Node forwards fixed read-only GET requests to loopback `8787`.
 | Collector config | `/home/boxtest2/aibox-connection-log/collector.json` |
 | Collector database | `/home/boxtest2/.local/share/aibox-connection-log/collector.sqlite3` |
 | Collector unit | `/etc/systemd/system/aibox-connection-collector.service` |
-| Dashboard app | `/home/boxtest2/aibox-monitor-webapp` |
+| Dashboard app | `/home/boxtest2/aibox-monitor` |
 | Dashboard unit | `/home/boxtest2/.config/systemd/user/aibox-monitor-webapp.service` |
 | Scoped backups | `/home/boxtest2/.aibox-integration-backup/<timestamp>/` |
 
