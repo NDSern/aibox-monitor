@@ -12,6 +12,7 @@ Credentials never leave this box; images are only written under CAPTURE_ROOT.
 """
 import argparse
 import glob
+import io
 import json
 import math
 import os
@@ -27,6 +28,8 @@ RESOLVER_PATH = os.path.expanduser("~/.aibox-camera-probe.json")
 CAPTURE_ROOT = os.path.expanduser("~/aibox-camera-capture")
 ARCHIVE_KEEP = 100
 LATEST_KEEP = 2
+# Keep mainstream stills under the hub download budget.
+SNAPSHOT_TARGET_BYTES = 150 * 1024
 WIDTH, HEIGHT = 160, 120
 FRAME_BYTES = WIDTH * HEIGHT
 BURST_COUNT = 10
@@ -259,6 +262,31 @@ def store_jpeg(directory, filename, blob, valid=None):
     return final
 
 
+def shrink_jpeg(blob, target=SNAPSHOT_TARGET_BYTES):
+    """Re-encode an oversized mainstream still so it stays transferable."""
+    if len(blob) <= target:
+        return blob
+    try:
+        image = Image.open(io.BytesIO(blob)).convert("RGB")
+    except Exception:
+        return blob
+    candidate_blob = blob
+    for scale, quality in ((1.0, 85), (0.85, 80), (0.72, 75),
+                           (0.6, 70), (0.5, 65), (0.4, 60)):
+        if scale == 1.0:
+            candidate = image
+        else:
+            size = (max(320, int(image.width * scale)),
+                    max(240, int(image.height * scale)))
+            candidate = image.resize(size, Image.LANCZOS)
+        buffer = io.BytesIO()
+        candidate.save(buffer, format="JPEG", quality=quality, optimize=True)
+        candidate_blob = buffer.getvalue()
+        if len(candidate_blob) <= target:
+            return candidate_blob
+    return candidate_blob
+
+
 def log(message):
     """One structured stderr line; never logs URIs (they may embed credentials)."""
     stamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
@@ -287,7 +315,8 @@ def capture_camera(camera_ip, entry):
     if main_uri:
         blob = grab_jpeg(main_uri)
         if blob is not None:
-            store_jpeg(os.path.join(CAPTURE_ROOT, "latest", camera_ip), "main.jpg", blob)
+            store_jpeg(os.path.join(CAPTURE_ROOT, "latest", camera_ip), "main.jpg",
+                       shrink_jpeg(blob))
             prune_dir(os.path.join(CAPTURE_ROOT, "latest", camera_ip), LATEST_KEEP, "main-")
             wrote = True
     if not wrote:

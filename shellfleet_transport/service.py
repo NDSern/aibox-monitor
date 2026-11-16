@@ -34,9 +34,11 @@ DEFAULT_ROLLOUT = "100.64.0.85"
 # connection-collector fire concurrently at each minute boundary. 8 slots made
 # the adapter reject the overlap with TransportError('busy'), failing transfers.
 MAX_CONCURRENT_EXEC = 24
-# A device whose agent repeatedly fails to finish an exec is put on a cooldown.
-# Callers then get an immediate "degraded" error and fall back to SSH instead of
-# paying the full exec timeout on every archive/snapshot pass.
+# A (device, operation) pair that repeatedly fails to finish is put on a
+# cooldown. Callers then get an immediate "degraded" error and fall back to SSH
+# instead of paying the full timeout on every archive/snapshot pass. The
+# cooldown is per operation, not per device: a stalled privileged exec must not
+# disable plain exec or downloads for the same box.
 DEGRADED_SECONDS = 600
 
 
@@ -90,6 +92,29 @@ class Adapter:
             time.sleep(5.0)
 
     # -- operations --------------------------------------------------
+    def _degraded_key(self, ip, op, privileged=False):
+        """Cooldown bucket: one per (device, operation, identity)."""
+        if op == "exec":
+            return (ip, "exec-root" if privileged else "exec-user")
+        return (ip, op)
+
+    def _check_degraded(self, key):
+        with self._degraded_lock:
+            until = self._degraded.get(key, 0)
+        if until > time.time():
+            raise TransportError("degraded", "recent timeouts")
+
+    def _mark_degraded(self, key, reason):
+        with self._degraded_lock:
+            self._degraded[key] = time.time() + DEGRADED_SECONDS
+        log.warning(
+            "device %s op %s degraded for %ss after %s",
+            key[0],
+            key[1],
+            DEGRADED_SECONDS,
+            reason,
+        )
+
     def status(self, key):
         device = identity.resolve(key)
         if not device:
@@ -120,11 +145,8 @@ class Adapter:
         # device user; run_as is ignored in that case.
         user = None if privileged else (run_as or device.get("user") or None)
         ip = device.get("ip") or str(key)
-        now = time.time()
-        with self._degraded_lock:
-            until = self._degraded.get(ip, 0)
-        if until > now:
-            raise TransportError("degraded", "recent timeouts")
+        degraded = self._degraded_key(ip, "exec", privileged=privileged)
+        self._check_degraded(degraded)
         if not self._exec_slots.acquire(blocking=False):
             raise TransportError("busy", "execution slots exhausted")
         try:
@@ -139,17 +161,10 @@ class Adapter:
                 )
             except TransportError as exc:
                 if exc.reason in ("command-timeout", "agent-unreachable"):
-                    with self._degraded_lock:
-                        self._degraded[ip] = time.time() + DEGRADED_SECONDS
-                    log.warning(
-                        "device %s degraded for %ss after %s",
-                        ip,
-                        DEGRADED_SECONDS,
-                        exc.reason,
-                    )
+                    self._mark_degraded(degraded, exc.reason)
                 raise
             with self._degraded_lock:
-                self._degraded.pop(ip, None)
+                self._degraded.pop(degraded, None)
             return result
         finally:
             self._exec_slots.release()
@@ -161,7 +176,18 @@ class Adapter:
         agent = device.get("agent")
         if not agent:
             raise TransportError("unregistered", "no agent enrolled")
-        return {"bytes": self.hub.download(agent, path, destination, timeout=timeout)}
+        ip = device.get("ip") or str(key)
+        degraded = self._degraded_key(ip, "download")
+        self._check_degraded(degraded)
+        try:
+            size = self.hub.download(agent, path, destination, timeout=timeout)
+        except TransportError as exc:
+            if exc.reason in ("command-timeout", "agent-unreachable", "transfer-failed"):
+                self._mark_degraded(degraded, exc.reason)
+            raise
+        with self._degraded_lock:
+            self._degraded.pop(degraded, None)
+        return {"bytes": size}
 
 
 def _dispatch(adapter, request):
