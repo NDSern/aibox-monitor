@@ -1,10 +1,24 @@
-# AIBOX Monitor Webapp
+# AIBOX Monitor
 
-React/Vite landing page for AIBOX status from `~/aibox-monitor`.
+Python monitor service and React/Vite dashboard for the AIBOX fleet, in one repo.
+
+## Layout
+
+- `main.py`, `config.py`, `camera_probe.py`, `aibox_transport.py`, `shellfleet_transport/` — Python monitor (`aibox-monitor.service`).
+- `src/`, `scripts/`, `index.html`, `vite.config.js` — dashboard (`aibox-monitor-webapp` user service).
+
+## Python monitor
+
+```sh
+python3 -m pytest tests
+python3 main.py
+```
+
+Reads `config.json` (ignored) and writes `aibox_monitor.log`.
+
+## Dashboard
 
 The app does not ping devices. It reads monitor config and latest monitor log lines, then writes `src/aibox-data.json`.
-
-## Setup
 
 ```sh
 npm install
@@ -12,7 +26,7 @@ npm run sync:data
 npm run dev
 ```
 
-## Build
+Build:
 
 ```sh
 npm run sync:data
