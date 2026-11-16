@@ -10,3 +10,8 @@ CLAUDE.md
 .claude
 .pytest_cache
 config.json
+config-backups/
+config.json.*
+config.candidate-*.json
+*.bak-*
+*.log.*
