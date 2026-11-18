@@ -37,6 +37,9 @@ SHELLFLEET_FILES_PER_BATCH = 4
 TRANSFER_BYTES = 200 * 1024
 CONNECT_TIMEOUT = 25
 REMOTE_DIR = "aibox-camera-capture/latest"
+# Camera-labelled mirror inside the agent file sandbox, served by the hub even
+# when shell execution is unavailable.
+HUB_SNAPSHOT_DIR = "snapshots"
 CAMERA_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
 SNAPSHOT_RE = re.compile(r"^main-\d+\.jpg$")
 CHECKERS = [
@@ -224,6 +227,77 @@ def fetch_batch(target, scope, entries, staging):
     return placed, fetched, failed
 
 
+def hub_cameras(device, scope):
+    """Camera directories the hub can see, falling back to local knowledge."""
+    entries = sft.list_files(device, HUB_SNAPSHOT_DIR)
+    cameras = []
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        if isinstance(name, str) and entry.get("is_dir") and CAMERA_RE.match(name):
+            cameras.append(name)
+    if cameras:
+        return sorted(cameras)
+    local = os.path.join(data_dir(), "camera-snapshots", scope)
+    try:
+        return sorted(name for name in os.listdir(local) if CAMERA_RE.match(name))
+    except OSError:
+        return []
+
+
+def remote_snapshots_hub(target, scope):
+    """Map camera -> {filename: size} using the hub file API only.
+
+    Last-resort discovery for devices whose shell sessions time out: the agent
+    still serves file operations, so the published mirror stays readable.
+    """
+    device = target.rsplit("@", 1)[-1]
+    cameras = hub_cameras(device, scope)
+    if not cameras:
+        return None
+    snapshots = {}
+    for camera in cameras:
+        entries = sft.list_files(device, "%s/%s" % (HUB_SNAPSHOT_DIR, camera))
+        files = {}
+        for entry in entries or []:
+            if not isinstance(entry, dict) or entry.get("is_dir"):
+                continue
+            name = entry.get("name")
+            if not isinstance(name, str) or not SNAPSHOT_RE.match(name):
+                continue
+            try:
+                files[name] = int(entry.get("size") or 0)
+            except (TypeError, ValueError):
+                continue
+        if files:
+            snapshots[camera] = files
+    return snapshots or None
+
+
+def fetch_hub(target, scope, entries, staging):
+    """Copy snapshots straight from the published mirror over the hub."""
+    device = target.rsplit("@", 1)[-1]
+    done, size, failed = [], 0, set()
+    for camera, name, _size in entries:
+        staged = os.path.join(staging, name)
+        written = sft.download_file(
+            device, "%s/%s/%s" % (HUB_SNAPSHOT_DIR, camera, name), staged)
+        if not written:
+            failed.add((camera, name))
+            continue
+        destination = os.path.join(data_dir(), "camera-snapshots", scope, camera)
+        try:
+            os.makedirs(destination, exist_ok=True)
+            os.replace(staged, os.path.join(destination, name))
+        except OSError:
+            failed.add((camera, name))
+            continue
+        done.append((camera, name))
+        size += written
+    return done, size, failed
+
+
 def take_batch(pending, limit):
     """Pick snapshots for one download under both the count and byte limits."""
     batch = []
@@ -248,10 +322,17 @@ def prune(scope, remote):
     for camera, files in remote.items():
         retain = sorted(files)[-SNAPSHOT_KEEP:]
         keep = set(retain)
+        if not keep:
+            continue
         destination = os.path.join(data_dir(), "camera-snapshots", scope, camera)
         try:
             names = [name for name in os.listdir(destination) if name.endswith(".jpg")]
         except OSError:
+            continue
+        # Never erase a camera's last good stills before their replacements
+        # exist locally: a failed or partially delivered pass must not be able
+        # to empty the directory it could not refill.
+        if not keep <= set(names):
             continue
         for name in names:
             if name in keep:
@@ -273,6 +354,14 @@ def batch_limit(target, default=FILES_PER_BATCH):
 def pull(scope, target, staging_root):
     started = time.time()
     remote, listing_bytes = remote_snapshots(target)
+    via_hub = False
+    if remote is None:
+        # Shell execution is the component that fails: the agent still answers
+        # file operations, so try the published mirror before giving up.
+        remote = remote_snapshots_hub(target, scope)
+        via_hub = remote is not None
+        if via_hub:
+            print(f"snapshot hub fallback: {scope} {target}", flush=True)
     if remote is None:
         print(f"snapshot pull failed: {scope} {target}", flush=True)
         record_usage("snapshot", scope, target, 0, 0, time.time() - started, "failed")
@@ -285,7 +374,7 @@ def pull(scope, target, staging_root):
     placed = 0
     moved = listing_bytes
     errors = 0
-    limit = batch_limit(target)
+    limit = FILES_PER_BATCH if via_hub else batch_limit(target)
     while pending:
         batch = take_batch(pending, limit)
         if not batch:
@@ -293,7 +382,10 @@ def pull(scope, target, staging_root):
             break
         with tempfile.TemporaryDirectory(prefix="snapshot-batch-", dir=staging_root) as staging:
             try:
-                done, size, failed = fetch_batch(target, scope, batch, staging)
+                if via_hub:
+                    done, size, failed = fetch_hub(target, scope, batch, staging)
+                else:
+                    done, size, failed = fetch_batch(target, scope, batch, staging)
             except subprocess.TimeoutExpired:
                 errors += 1
                 break

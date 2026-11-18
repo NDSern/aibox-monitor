@@ -42,6 +42,13 @@ from PIL import Image, ImageStat
 CONFIG_GLOB = os.path.expanduser("~/apps/agent/machinery/agent*/data/config/config.json")
 RESOLVER_PATH = os.path.expanduser("~/.aibox-camera-probe.json")
 CAPTURE_ROOT = os.path.expanduser("~/aibox-camera-capture")
+# Camera-labelled mirror inside the agent file sandbox. The hub serves these
+# files even when shell execution times out, so they are the last-resort
+# snapshot source. Original timestamped names are preserved so a retry never
+# mistakes a stale still for a fresh one.
+HUB_MIRROR_DIR = os.path.expanduser(os.environ.get(
+    "AIBOX_HUB_MIRROR_DIR", "~/.shellfleet-files/snapshots"))
+HUB_MIRROR_KEEP = 2
 CACHE_PATH = os.path.join(CAPTURE_ROOT, ".capture-cam-cache.json")
 CACHE_TTL_SECONDS = 6 * 3600
 ARCHIVE_KEEP = 100
@@ -376,6 +383,24 @@ def store_jpeg(directory, filename, blob, valid=None):
     return final
 
 
+def publish_mirror(source, camera_ip):
+    """Copy a still into the agent sandbox for hub-only retrieval.
+
+    Capture must never fail because publishing is unavailable: the mirror is a
+    last-resort source, so every error is swallowed.
+    """
+    try:
+        name = os.path.basename(source)
+        directory = os.path.join(HUB_MIRROR_DIR, camera_ip)
+        os.makedirs(directory, exist_ok=True)
+        tmp = os.path.join(directory, "." + name + ".tmp")
+        shutil.copyfile(source, tmp)
+        os.replace(tmp, os.path.join(directory, name))
+        prune_dir(directory, HUB_MIRROR_KEEP, "main-")
+    except OSError:
+        pass
+
+
 def capture_camera(camera_ip, entry, cache):
     """Capture one substream frame into the archive and one mainstream into latest.
 
@@ -407,9 +432,10 @@ def capture_camera(camera_ip, entry, cache):
     if main_uri:
         blob = grab_jpeg(main_uri)
         if blob is not None:
-            store_jpeg(os.path.join(CAPTURE_ROOT, "latest", camera_ip), "main.jpg",
-                       shrink_jpeg(blob))
+            still = store_jpeg(os.path.join(CAPTURE_ROOT, "latest", camera_ip), "main.jpg",
+                               shrink_jpeg(blob))
             prune_dir(os.path.join(CAPTURE_ROOT, "latest", camera_ip), LATEST_KEEP, "main-")
+            publish_mirror(still, camera_ip)
             wrote = True
     if not wrote:
         log(f"no frame for {camera_ip}: upstream feed returned nothing")

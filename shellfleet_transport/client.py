@@ -69,6 +69,15 @@ def execute(device, script, run_as=None, timeout=180, session_timeout=30,
     )
 
 
+def list_files(device, path="", timeout=20, **kwargs):
+    """List one sandbox directory; works without shell execution."""
+    result = call(
+        {"op": "list", "device": device, "path": path, "timeout": timeout},
+        **kwargs
+    )
+    return result.get("entries") or []
+
+
 def download(device, path, destination, timeout=600, **kwargs):
     return call(
         {"op": "download", "device": device, "path": path,

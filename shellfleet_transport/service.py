@@ -170,6 +170,16 @@ class Adapter:
         finally:
             self._exec_slots.release()
 
+    def list(self, key, path="", timeout=20):
+        """List one sandbox directory through the hub file API."""
+        device = identity.resolve(key)
+        if not device:
+            raise TransportError("unknown-device", str(key))
+        agent = device.get("agent")
+        if not agent:
+            raise TransportError("unregistered", "no agent enrolled")
+        return {"entries": self.hub.list(agent, path, timeout=timeout)}
+
     def download(self, key, path, destination, timeout=600):
         device = identity.resolve(key)
         if not device:
@@ -210,6 +220,12 @@ def _dispatch(adapter, request):
             timeout=int(request.get("timeout") or 180),
             privileged=bool(request.get("privileged")),
             session_timeout=int(request.get("session_timeout") or 30),
+        )
+    if op == "list":
+        return adapter.list(
+            request.get("device"),
+            request.get("path") or "",
+            timeout=int(request.get("timeout") or 20),
         )
     if op == "download":
         return adapter.download(

@@ -532,6 +532,39 @@ class HubConnection:
                 pass
 
     # -- file transfer -----------------------------------------------
+    def list(self, agent_id, sandbox_path, timeout=20):
+        """List one sandbox directory.
+
+        File listing is a separate hub operation from command execution: the
+        agent answers it from its filesystem service, so it still works while
+        shell sessions time out.
+        """
+        request_id = "l" + secrets.token_hex(6)
+        channel = self._register(request_id)
+        try:
+            self.emit("fs-list", {
+                "agent_id": agent_id, "req_id": request_id, "path": sandbox_path,
+            })
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                try:
+                    name, event = channel.get(timeout=max(0.05, deadline - time.time()))
+                except queue.Empty:
+                    break
+                if name != "fs-event" or not isinstance(event, dict):
+                    continue
+                if event.get("req_id") != request_id:
+                    continue
+                kind = event.get("kind")
+                if kind == "error":
+                    raise TransportError("transfer-failed", str(event.get("error") or "error"))
+                if kind == "list":
+                    entries = event.get("entries")
+                    return entries if isinstance(entries, list) else []
+        finally:
+            self._release(request_id)
+        raise TransportError("command-timeout", "no file-list response")
+
     def download(self, agent_id, sandbox_path, destination, timeout=600,
                  max_bytes=64 * 1024 * 1024):
         """Download one sandboxed file.
