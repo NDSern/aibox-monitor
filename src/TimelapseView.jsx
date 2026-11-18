@@ -13,6 +13,15 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { fetchArchiveTimeline, findFrameAt, FRAME_INTERVAL_MS, frameIndexAt, frameOrdinal, HISTORY_DAYS } from "./timelapse-archive.js";
+import {
+  buildMachineSpans,
+  formatDuration,
+  MACHINE_KINDS,
+  machineReasonLabel,
+  machineRows,
+  machineStateLabel,
+  spanPercent,
+} from "./machine-uptime.js";
 import "./timelapse.css";
 
 const ZOOM_OPTIONS = [
@@ -111,7 +120,7 @@ function dayIndexOf(timeline, time) {
   return index === -1 ? timeline.days.length - 1 : index;
 }
 
-export default function TimelapseView({ networks = [], now, onMoveNetwork }) {
+export default function TimelapseView({ networks = [], aiboxes = [], now, onMoveNetwork }) {
   const [referenceNow] = useState(() => now || Date.now());
   const cameraIndex = useMemo(() => {
     const list = [];
@@ -250,6 +259,20 @@ export default function TimelapseView({ networks = [], now, onMoveNetwork }) {
       width: Math.max(((segment.end - segment.start) / windowSpan) * 100, 0.35),
     }));
   }, [timeline, day, windowStart, windowSpan]);
+
+  const machineScopeRows = useMemo(
+    () => machineRows(selected?.networkId, aiboxes),
+    [selected?.networkId, aiboxes],
+  );
+
+  const machineRowSpans = useMemo(
+    () =>
+      machineScopeRows.map((row) => ({
+        ...row,
+        detail: buildMachineSpans(row.machine, windowStart, windowEnd),
+      })),
+    [machineScopeRows, windowStart, windowEnd],
+  );
 
   useEffect(() => {
     if (!frame || frame.missing) {
@@ -698,6 +721,73 @@ export default function TimelapseView({ networks = [], now, onMoveNetwork }) {
               </div>
             </div>
 
+            {machineRowSpans.length > 0 && (
+              <div className="tlMachines" role="group" aria-label="Trạng thái nguồn của AIBOX">
+                <div className="tlMachinesHead">
+                  <span className="tlMachinesTitle">AIBOX</span>
+                  <span className="tlMachinesHint">Nguồn máy, không phải trạng thái kết nối</span>
+                </div>
+                {machineRowSpans.map((row) => {
+                  const { spans = [], boots = [], hasEvidence, note } = row.detail || {};
+                  return (
+                    <div className="tlMachineRow" key={row.ip || row.name}>
+                      <span className="tlMachineName" title={row.ip || row.name}>{row.name}</span>
+                      <div className="tlMachineTrack">
+                        {spans.map((span, index) => {
+                          const { left, width } = spanPercent(span, windowStart, windowEnd);
+                          const kindClass = span.kind === MACHINE_KINDS.RUNNING
+                            ? "tlMachineRunning"
+                            : span.kind === MACHINE_KINDS.GAP
+                              ? "tlMachineGap"
+                              : "tlMachineUnknown";
+                          const detail = [
+                            machineStateLabel(span.kind),
+                            `${formatStamp(span.start)} → ${formatStamp(span.end)}`,
+                            formatDuration(span.end - span.start),
+                            machineReasonLabel(span.reason),
+                            span.inferred ? "Suy ra, không quan sát trực tiếp" : null,
+                            span.provisional ? "Mốc bắt đầu gần đúng" : null,
+                          ].filter(Boolean).join(" · ");
+                          const geometry = { left: `${left}%`, width: `${width}%` };
+                          const focusProps = {
+                            tabIndex: 0,
+                            role: "img",
+                            "aria-label": detail,
+                          };
+                          if (span.kind === MACHINE_KINDS.RUNNING) {
+                            return <span className={`tlMachineSpan ${kindClass}`} key={index} style={geometry} title={detail} {...focusProps} />;
+                          }
+                          return (
+                            <span className={`tlMachineSpan ${kindClass}`} key={index} style={geometry} title={detail} {...focusProps}>
+                              <span className="tlMachineSpanText">{span.kind === MACHINE_KINDS.GAP ? "mất điện" : "không rõ"}</span>
+                            </span>
+                          );
+                        })}
+                        {boots.map((boot) => {
+                          const percent = ((boot.at - windowStart) / windowSpan) * 100;
+                          if (percent < 0 || percent > 100) return null;
+                          return (
+                            <span
+                              className="tlMachineBoot"
+                              key={`boot-${boot.at}`}
+                              style={{ left: `${clamp(percent, 0, 100)}%` }}
+                              title={`Khởi động lại ${formatStamp(boot.at)}`}
+                            />
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+                {machineRowSpans.every((row) => !row.detail?.hasEvidence) && (
+                  <p className="tlMachineEmpty">Chưa có dữ liệu nguồn cho AIBOX phụ trách camera này.</p>
+                )}
+                {machineRowSpans.some((row) => row.detail?.note === "unreachable-at-last-probe") && (
+                  <p className="tlMachineEmpty">AIBOX không phản hồi ở lần kiểm tra gần nhất; phần sau đó là không rõ.</p>
+                )}
+              </div>
+            )}
+
             <div className="tlDays" ref={dayStripRef} role="group" aria-label="Năm ngày gần nhất">
               {timeline?.days.map((item) => (
                 <button
@@ -720,6 +810,14 @@ export default function TimelapseView({ networks = [], now, onMoveNetwork }) {
             <div className="tlLegend">
               <span><i className="tlLegendAvailable" aria-hidden="true" />Có ảnh</span>
               <span><i className="tlLegendGap" aria-hidden="true" />Thiếu ảnh</span>
+              {machineRowSpans.length > 0 && (
+                <>
+                  <span className="tlLegendPart"><i className="tlLegendRunning" aria-hidden="true" />Máy đang chạy</span>
+                  <span className="tlLegendPart"><i className="tlLegendMachineGap" aria-hidden="true" />Suy ra mất điện</span>
+                  <span className="tlLegendPart"><i className="tlLegendUnknown" aria-hidden="true" />Không rõ</span>
+                  <span className="tlLegendPart"><i className="tlLegendBoot" aria-hidden="true" />Khởi động lại</span>
+                </>
+              )}
               <span className="tlMuted">{timeline?.frames?.length ? `Lưu trữ từ ${formatStamp(timeline.frames[0].time)}` : "Chưa có ảnh lưu trữ"}</span>
             </div>
           </div>

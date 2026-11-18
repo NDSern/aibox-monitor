@@ -3615,7 +3615,7 @@ function App() {
             </div>
           </div>
         ) : activeView === "timelapse" ? (
-          <TimelapseView networks={timelapseNetworks} onMoveNetwork={reorderTimelapseNetwork} />
+          <TimelapseView aiboxes={aiboxes} networks={timelapseNetworks} onMoveNetwork={reorderTimelapseNetwork} />
         ) : activeView === "fleet" ? (
           <div className={`container-xxl fleetDetailView ${desktopFleet ? "desktopFleet" : "flowFleet"}`}>
             <section className="hero controlDeck fleetCommandBand">

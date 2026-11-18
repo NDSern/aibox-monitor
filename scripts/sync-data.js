@@ -815,6 +815,48 @@ function aiboxCauseAt(outages, atMs) {
   return chosen.cause === "power" || chosen.cause === "network" ? chosen.cause : "unknown";
 }
 
+// Raw boot evidence for the uptime timeline. The summary above answers "what
+// is the current state"; the timeline needs the individual boot sessions and
+// outage windows so it can draw them at their real positions. Everything here
+// is observation: a boot session that never ended is only known to have been
+// running until the next observation, and an outage only gets a cause after
+// the box comes back.
+function loadAiboxMachineEvidence(store) {
+  const devices = (store && store.devices) || {};
+  const result = {};
+  for (const [ip, entry] of Object.entries(devices)) {
+    if (!entry || typeof entry !== "object") continue;
+    const reboots = (Array.isArray(entry.reboots) ? entry.reboots : [])
+      .filter((item) => item && Number.isFinite(Date.parse(item.at)))
+      .map((item) => ({ at: item.at, uptimeSeconds: item.uptimeSeconds ?? null }));
+    const outages = (Array.isArray(entry.outages) ? entry.outages : [])
+      .filter((item) => item && Number.isFinite(Date.parse(item.startedAt)))
+      .map((item) => ({
+        startedAt: item.startedAt,
+        endedAt: Number.isFinite(Date.parse(item.endedAt)) ? item.endedAt : null,
+        cause: typeof item.cause === "string" ? item.cause : "unknown",
+        evidence: typeof item.evidence === "string" ? item.evidence : null,
+        provisionalStart: Boolean(item.provisionalStart),
+        bootAtAfter: Number.isFinite(Date.parse(item.bootAtAfter)) ? item.bootAtAfter : null,
+      }));
+    const openSince = entry.openOutage && Number.isFinite(Date.parse(entry.openOutage.startedAt))
+      ? entry.openOutage.startedAt
+      : null;
+    result[ip] = {
+      observedAt: entry.observedAt || null,
+      bootAt: Number.isFinite(Date.parse(entry.bootAt)) ? entry.bootAt : null,
+      uptimeSeconds: entry.uptimeSeconds ?? null,
+      reachable: Boolean(entry.reachable),
+      openOutageSince: openSince,
+      reboots,
+      outages,
+      retentionDays: Number.isFinite(store.retainDays) ? store.retainDays : null,
+      bootToleranceSeconds: Number.isFinite(store.bootToleranceSeconds) ? store.bootToleranceSeconds : null,
+    };
+  }
+  return result;
+}
+
 function loadAiboxBootHistory() {
   const store = readJsonSafe(bootHistoryPath, { devices: {} });
   const devices = store.devices || {};
@@ -858,6 +900,7 @@ function normalize(config) {
   const defaultRecipients = config.default_recipients || [];
   const bootHistory = loadAiboxBootHistory();
   const bootOutages = loadAiboxBootOutages();
+  const machineEvidence = loadAiboxMachineEvidence(readJsonSafe(bootHistoryPath, { devices: {} }));
   const history = buildStatusHistory(config);
   const targetStatuses = history.targets;
   const scopeStatuses = history.scopes;
@@ -890,6 +933,7 @@ function normalize(config) {
         statusSince: statuses[box.ip] ? statuses[box.ip].statusSince : null,
         statusSource: statuses[box.ip] ? statuses[box.ip].source || "monitor" : "monitor",
         ...(bootHistory[box.ip] ? { boot: bootHistory[box.ip] } : {}),
+        ...(machineEvidence[box.ip] ? { machine: machineEvidence[box.ip] } : {}),
         // Tailscale is diagnostic only for migrated devices: the overview shows
         // it beside the primary Shell Fleet state, nothing else consumes it.
         ...(tailscaleStatuses[box.ip]

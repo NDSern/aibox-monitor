@@ -5,7 +5,7 @@
     "preview": "vite preview",
     "start": "node scripts/server.js",
     "sync:data": "node scripts/sync-data.js",
-    "test": "node scripts/test-device-order.mjs && node scripts/test-server.js && node scripts/test-availability.js && node scripts/test-tv-groups.mjs",
+    "test": "node scripts/test-device-order.mjs && node scripts/test-server.js && node scripts/test-availability.js && node scripts/test-tv-groups.mjs && node scripts/test-machine-uptime.mjs",
     "test:order": "node scripts/test-device-order.mjs"
   },
   "dependencies": {

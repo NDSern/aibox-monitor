@@ -563,6 +563,130 @@
 .tlTick.is-first { transform: translateX(0); }
 .tlTick.is-last { transform: translateX(-100%); }
 
+/* --- AIBOX machine power rows (aligned with the frame track) --- */
+.tlMachines {
+  border-top: 1px solid var(--tl-rule);
+  display: grid;
+  gap: 0.3rem;
+  margin-top: 0.45rem;
+  padding-top: 0.45rem;
+}
+
+.tlMachinesHead {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.tlMachinesTitle {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.tlMachinesHint {
+  color: var(--tl-muted);
+  font-size: 0.6875rem;
+}
+
+.tlMachineRow {
+  align-items: center;
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: minmax(3.6rem, 5.5rem) 1fr;
+}
+
+.tlMachineName {
+  color: var(--tl-muted);
+  font-size: 0.6875rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tlMachineTrack {
+  background: var(--tl-rule);
+  border-radius: 3px;
+  height: 0.95rem;
+  overflow: hidden;
+  position: relative;
+}
+
+.tlMachineSpan {
+  bottom: 0;
+  position: absolute;
+  top: 0;
+}
+
+.tlMachineSpan:focus-visible {
+  box-shadow: 0 0 0 2px var(--tl-accent);
+  outline: none;
+  z-index: 2;
+}
+
+.tlMachineSpan.tlMachineRunning {
+  background: var(--tl-accent-soft);
+}
+
+.tlMachineSpan.tlMachineGap {
+  background:
+    repeating-linear-gradient(
+      135deg,
+      var(--tl-gap) 0 4px,
+      var(--tl-panel) 4px 8px
+    );
+  box-shadow: inset 0 0 0 1px var(--tl-faint);
+}
+
+.tlMachineSpan.tlMachineUnknown {
+  background:
+    repeating-linear-gradient(
+      90deg,
+      var(--tl-rule) 0 6px,
+      transparent 6px 12px
+    );
+}
+
+.tlMachineSpanText {
+  color: var(--tl-ink);
+  font-size: 0.5625rem;
+  left: 50%;
+  line-height: 1;
+  overflow: hidden;
+  position: absolute;
+  text-overflow: ellipsis;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  white-space: nowrap;
+}
+
+.tlMachineBoot {
+  background: var(--tl-ink);
+  bottom: 0;
+  position: absolute;
+  top: 0;
+  width: 1px;
+}
+
+.tlMachineBoot::before {
+  border-left: 3px solid transparent;
+  border-right: 3px solid transparent;
+  border-top: 4px solid var(--tl-ink);
+  content: "";
+  left: 50%;
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+}
+
+.tlMachineEmpty {
+  color: var(--tl-muted);
+  font-size: 0.6875rem;
+  margin: 0.1rem 0 0;
+}
+
 .tlDays {
   display: flex;
   gap: 0.3rem;
@@ -630,6 +754,32 @@
 
 .tlLegendAvailable { background: var(--tl-accent-soft); }
 .tlLegendGap { background: var(--tl-gap); }
+.tlLegendRunning { background: var(--tl-accent-soft); }
+
+.tlLegendMachineGap {
+  background:
+    repeating-linear-gradient(
+      135deg,
+      var(--tl-gap) 0 3px,
+      var(--tl-panel) 3px 6px
+    );
+  box-shadow: inset 0 0 0 1px var(--tl-faint);
+}
+
+.tlLegendUnknown {
+  background:
+    repeating-linear-gradient(
+      90deg,
+      var(--tl-rule) 0 3px,
+      transparent 3px 6px
+    );
+}
+
+.tlLegendBoot {
+  background: var(--tl-ink);
+  border-radius: 0;
+  width: 2px;
+}
 
 .tlSheetClose { display: none; }
 
