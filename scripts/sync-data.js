@@ -828,7 +828,7 @@ function loadAiboxMachineEvidence(store) {
     if (!entry || typeof entry !== "object") continue;
     const reboots = (Array.isArray(entry.reboots) ? entry.reboots : [])
       .filter((item) => item && Number.isFinite(Date.parse(item.at)))
-      .map((item) => ({ at: item.at, uptimeSeconds: item.uptimeSeconds ?? null }));
+      .map((item) => ({ at: item.at, uptimeSeconds: item.uptimeSeconds == null ? null : item.uptimeSeconds }));
     const outages = (Array.isArray(entry.outages) ? entry.outages : [])
       .filter((item) => item && Number.isFinite(Date.parse(item.startedAt)))
       .map((item) => ({
@@ -845,7 +845,7 @@ function loadAiboxMachineEvidence(store) {
     result[ip] = {
       observedAt: entry.observedAt || null,
       bootAt: Number.isFinite(Date.parse(entry.bootAt)) ? entry.bootAt : null,
-      uptimeSeconds: entry.uptimeSeconds ?? null,
+      uptimeSeconds: entry.uptimeSeconds == null ? null : entry.uptimeSeconds,
       reachable: Boolean(entry.reachable),
       openOutageSince: openSince,
       reboots,
